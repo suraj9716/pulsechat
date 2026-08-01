@@ -42,6 +42,7 @@ export interface CallSignal {
   fromUsername?: string;
   toUserId: string;
   callId: string;
+  sentAt?: number;
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
 }
@@ -299,22 +300,29 @@ export class WebSocketService implements OnDestroy {
     return this.callSignal$;
   }
 
-  sendCallSignal(payload: Partial<CallSignal> & { type: CallSignal['type']; toUserId: string; callId: string }): void {
-    const publish = (): void => {
-      if (!this.client?.connected) return;
+  sendCallSignal(
+    payload: Partial<CallSignal> & { type: CallSignal['type']; toUserId: string; callId: string },
+    guard?: () => boolean
+  ): Promise<boolean> {
+    const body = { ...payload, sentAt: payload.sentAt ?? Date.now() };
+    const publish = (): boolean => {
+      if (guard && !guard()) return false;
+      if (!this.client?.connected) return false;
       this.client.publish({
         destination: '/app/call/signal',
-        body: JSON.stringify(payload)
+        body: JSON.stringify(body)
       });
+      return true;
     };
     if (this.client?.connected) {
-      publish();
-      return;
+      return Promise.resolve(publish());
     }
     if (!this.client) {
       this.connect();
     }
-    void this.ensureConnected(5000).then(publish).catch(() => publish());
+    return this.ensureConnected(8000)
+      .then(() => publish())
+      .catch(() => publish());
   }
 
   /** Wait until STOMP is connected (used before placing a call). */
