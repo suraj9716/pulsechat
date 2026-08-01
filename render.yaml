@@ -47,8 +47,8 @@ services:
     name: pulsechat-frontend
     runtime: static
     rootDir: frontend
-    buildCommand: npm install && npm run build
-    staticPublishPath: dist/frontend/browser
+    buildCommand: npm ci && npm run build
+    staticPublishPath: ./dist/frontend/browser
     envVars:
       - key: NODE_VERSION
         value: "20"
