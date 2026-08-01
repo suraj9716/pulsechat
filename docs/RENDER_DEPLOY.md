@@ -80,6 +80,16 @@ The backend accepts **`DATABASE_URL`** (Render auto-injects when linked) or **`P
 3. **Build Command:** `npm install && npm run build`
 4. **Publish Directory:** `dist/frontend/browser`
 
+### Fix refresh 404 on routes like `/friends/chat/...`
+
+Render Dashboard → frontend Static Site → **Redirects/Rewrites** → Add rule:
+
+| Source | Destination | Action |
+|--------|-------------|--------|
+| `/*` | `/index.html` | **Rewrite** |
+
+Save, then redeploy. The build also copies `404.html` as a fallback.
+
 Update `frontend/src/environments/environment.prod.ts` before deploy:
 
 ```typescript
