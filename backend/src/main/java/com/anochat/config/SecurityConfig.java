@@ -70,12 +70,23 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
         String originsStr = appProperties.getCors().getAllowedOrigins();
-        List<String> origins = originsStr != null && !originsStr.isBlank()
-                ? java.util.Arrays.stream(originsStr.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList()
-                : List.of("http://localhost:4200");
-        config.setAllowedOrigins(origins.isEmpty() ? List.of("http://localhost:4200") : origins);
+
+        if (originsStr == null || originsStr.isBlank() || "*".equals(originsStr.trim())) {
+            config.setAllowedOriginPatterns(List.of("*"));
+        } else {
+            List<String> origins = java.util.Arrays.stream(originsStr.split(","))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .toList();
+            if (origins.contains("*")) {
+                config.setAllowedOriginPatterns(List.of("*"));
+            } else {
+                config.setAllowedOriginPatterns(origins);
+            }
+        }
+
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"));
-        config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept", "X-Requested-With", "Origin"));
+        config.setAllowedHeaders(List.of("*"));
         config.setExposedHeaders(List.of("Authorization"));
         config.setAllowCredentials(true);
         config.setMaxAge(3600L);
