@@ -300,10 +300,41 @@ export class WebSocketService implements OnDestroy {
   }
 
   sendCallSignal(payload: Partial<CallSignal> & { type: CallSignal['type']; toUserId: string; callId: string }): void {
-    if (!this.client?.connected) return;
-    this.client.publish({
-      destination: '/app/call/signal',
-      body: JSON.stringify(payload)
+    const publish = (): void => {
+      if (!this.client?.connected) return;
+      this.client.publish({
+        destination: '/app/call/signal',
+        body: JSON.stringify(payload)
+      });
+    };
+    if (this.client?.connected) {
+      publish();
+      return;
+    }
+    if (!this.client) {
+      this.connect();
+    }
+    void this.ensureConnected(5000).then(publish).catch(() => publish());
+  }
+
+  /** Wait until STOMP is connected (used before placing a call). */
+  ensureConnected(timeoutMs = 10000): Promise<void> {
+    if (this.client?.connected) {
+      return Promise.resolve();
+    }
+    if (!this.client) {
+      this.connect();
+    }
+    return new Promise((resolve, reject) => {
+      const sub = this.connected$.pipe(
+        filter((v) => v === true),
+        take(1),
+        timeout(timeoutMs)
+      ).subscribe({
+        next: () => resolve(),
+        error: (e) => reject(e)
+      });
+      setTimeout(() => sub.unsubscribe(), timeoutMs + 100);
     });
   }
 
