@@ -88,10 +88,6 @@ logging:
     com.anochat: INFO
     org.springframework.web: INFO
     org.springframework.security: INFO
-    org.springframework.web.socket: DEBUG
+    org.springframework.web.socket: INFO
   pattern:
     console: "%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
-  file:
-    name: logs/ano-chat.log
-    max-size: 50MB
-    max-history: 30
