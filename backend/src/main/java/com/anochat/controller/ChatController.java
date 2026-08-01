@@ -1,6 +1,7 @@
 package com.anochat.controller;
 
 import com.anochat.api.dto.request.CallLogRequest;
+import com.anochat.api.dto.request.CallSignalRequest;
 import com.anochat.api.dto.request.MessageRequest;
 import com.anochat.api.dto.response.ChatRoomResponse;
 import com.anochat.api.dto.response.MessageResponse;
@@ -8,6 +9,7 @@ import com.anochat.api.dto.response.UnreadSummaryResponse;
 import com.anochat.api.dto.response.NextPartnerResponse;
 import com.anochat.security.UserPrincipal;
 import com.anochat.domain.entity.MessageType;
+import com.anochat.service.CallRelayService;
 import com.anochat.service.FileStorageService;
 import com.anochat.service.ChatRoomService;
 import com.anochat.service.MatchmakingService;
@@ -36,6 +38,7 @@ public class ChatController {
     private final MatchmakingService matchmakingService;
     private final SimpMessagingTemplate messagingTemplate;
     private final FileStorageService fileStorageService;
+    private final CallRelayService callRelayService;
 
     @GetMapping("/room/current")
     public ResponseEntity<ChatRoomResponse> getCurrentRoom(@AuthenticationPrincipal UserPrincipal principal) {
@@ -101,6 +104,27 @@ public class ChatController {
     /**
      * Next partner: leave current room and re-enter matchmaking (client should call matchmaking/search again with preference).
      */
+    @PostMapping("/call/signal")
+    public ResponseEntity<Map<String, Object>> relayCallSignal(@AuthenticationPrincipal UserPrincipal principal,
+                                                               @Valid @RequestBody CallSignalRequest request) {
+        Map<String, Object> payload = new java.util.HashMap<>();
+        payload.put("type", request.getType());
+        payload.put("callId", request.getCallId());
+        if (request.getSdp() != null) {
+            payload.put("sdp", request.getSdp());
+        }
+        if (request.getCandidate() != null) {
+            payload.put("candidate", request.getCandidate());
+        }
+        payload.put("sentAt", request.getSentAt() != null ? request.getSentAt() : System.currentTimeMillis());
+
+        boolean delivered = callRelayService.relay(principal, request.getToUserId(), payload);
+        if (!delivered) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Could not deliver call signal"));
+        }
+        return ResponseEntity.ok(Map.of("ok", true));
+    }
+
     @PostMapping("/friends/{friendId}/call-log")
     public ResponseEntity<MessageResponse> logCall(@AuthenticationPrincipal UserPrincipal principal,
                                                    @PathVariable UUID friendId,

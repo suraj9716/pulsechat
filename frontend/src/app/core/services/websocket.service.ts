@@ -142,6 +142,12 @@ export class WebSocketService implements OnDestroy {
         }
         if (this.userCallsUserId) {
           this.subscribeUserCallsInternal(this.userCallsUserId);
+        } else {
+          const userId = this.auth.user()?.id;
+          if (userId) {
+            this.userCallsUserId = userId;
+            this.subscribeUserCallsInternal(userId);
+          }
         }
       },
       onDisconnect: () => this.connected.next(false),
@@ -515,10 +521,46 @@ export class WebSocketService implements OnDestroy {
 
   private emitCallSignal(body: string): void {
     try {
-      this.callSignals.next(JSON.parse(body));
+      const raw = JSON.parse(body) as Record<string, unknown>;
+      this.callSignals.next(this.normalizeIncomingSignal(raw));
     } catch (e) {
       console.warn('Parse call signal failed', e);
     }
+  }
+
+  private normalizeIncomingSignal(raw: Record<string, unknown>): CallSignal {
+    let sdp = raw['sdp'];
+    if (typeof sdp === 'string') {
+      try {
+        sdp = JSON.parse(sdp);
+      } catch {
+        sdp = undefined;
+      }
+    }
+    if (sdp && typeof sdp === 'object') {
+      const s = sdp as Record<string, unknown>;
+      sdp = { type: s['type'], sdp: s['sdp'] };
+    }
+
+    let candidate = raw['candidate'];
+    if (typeof candidate === 'string') {
+      try {
+        candidate = JSON.parse(candidate);
+      } catch {
+        candidate = undefined;
+      }
+    }
+
+    return {
+      type: raw['type'] as CallSignal['type'],
+      fromUserId: String(raw['fromUserId'] ?? ''),
+      fromUsername: raw['fromUsername'] as string | undefined,
+      toUserId: String(raw['toUserId'] ?? ''),
+      callId: String(raw['callId'] ?? ''),
+      sentAt: typeof raw['sentAt'] === 'number' ? raw['sentAt'] : Number(raw['sentAt']),
+      sdp: sdp as RTCSessionDescriptionInit | undefined,
+      candidate: candidate as RTCIceCandidateInit | undefined
+    };
   }
 
   sendTyping(roomId: string, typing: boolean): Observable<void> {

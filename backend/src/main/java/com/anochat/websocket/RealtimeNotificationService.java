@@ -71,4 +71,11 @@ public class RealtimeNotificationService {
         messagingTemplate.convertAndSend(TOPIC_USER_PREFIX + receiverId + "/partner-searching", payload);
         log.debug("Partner searching notification sent to user {} ({})", receiverUsername, receiverId);
     }
+
+    public void sendCallSignal(UUID receiverId, String receiverUsername, Map<String, Object> payload) {
+        if (receiverUsername != null && !receiverUsername.isBlank()) {
+            messagingTemplate.convertAndSendToUser(receiverUsername, QUEUE_CALLS, payload);
+        }
+        messagingTemplate.convertAndSend(TOPIC_USER_PREFIX + receiverId + "/calls", payload);
+    }
 }

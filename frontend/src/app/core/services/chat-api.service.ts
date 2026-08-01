@@ -77,6 +77,17 @@ export class ChatApiService {
     return this.http.post<MessageResponse>(`${this.base}/friends/${friendId}/call-log`, { content });
   }
 
+  relayCallSignal(payload: {
+    toUserId: string;
+    type: string;
+    callId: string;
+    sdp?: { type?: string; sdp?: string };
+    candidate?: RTCIceCandidateInit;
+    sentAt?: number;
+  }): Observable<{ ok: boolean }> {
+    return this.http.post<{ ok: boolean }>(`${this.base}/call/signal`, payload);
+  }
+
   nextPartner(roomId: string): Observable<NextPartnerResponse> {
     return this.http.post<NextPartnerResponse>(`${this.base}/room/${roomId}/next`, {});
   }

@@ -93,7 +93,7 @@ export class CallService implements OnDestroy {
         return;
       }
 
-      const sent = await this.ws.sendCallSignal({
+      const sent = await this.sendSignal({
         type: 'offer',
         toUserId,
         callId: id,
@@ -133,7 +133,7 @@ export class CallService implements OnDestroy {
       await this.pc.setLocalDescription(answer);
       if (!this.canSendForSession(session, callId)) return;
 
-      const sent = await this.ws.sendCallSignal({
+      const sent = await this.sendSignal({
         type: 'answer',
         toUserId: remoteId,
         callId,
@@ -180,7 +180,7 @@ export class CallService implements OnDestroy {
     // Invalidate any in-flight offer/answer before cleanup so delayed publish is blocked.
     this.callSession++;
     if (to && id) {
-      void this.ws.sendCallSignal({ type, toUserId: to, callId: id });
+      void this.sendSignal({ type, toUserId: to, callId: id });
     }
     this.cleanup(type, false);
   }
@@ -203,11 +203,11 @@ export class CallService implements OnDestroy {
     switch (sig.type) {
       case 'offer':
         if (this.shouldRejectOffer(sig)) {
-          void this.ws.sendCallSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
+          void this.sendSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
           return;
         }
         if (this.state() !== 'idle') {
-          void this.ws.sendCallSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
+          void this.sendSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
           return;
         }
         this.callSession++;
@@ -281,6 +281,30 @@ export class CallService implements OnDestroy {
     return { type: desc.type as RTCSdpType, sdp: desc.sdp ?? '' };
   }
 
+  private async sendSignal(payload: {
+    type: CallSignal['type'];
+    toUserId: string;
+    callId: string;
+    sdp?: RTCSessionDescriptionInit;
+    candidate?: RTCIceCandidateInit;
+  }): Promise<boolean> {
+    try {
+      await firstValueFrom(
+        this.chatApi.relayCallSignal({
+          toUserId: payload.toUserId,
+          type: payload.type,
+          callId: payload.callId,
+          sdp: payload.sdp,
+          candidate: payload.candidate,
+          sentAt: Date.now()
+        })
+      );
+      return true;
+    } catch {
+      return this.ws.sendCallSignal(payload);
+    }
+  }
+
   private async createPeerConnection(): Promise<void> {
     if (this.pc) return;
     this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
@@ -289,14 +313,13 @@ export class CallService implements OnDestroy {
       const to = this.remoteUserId();
       const id = this.callId();
       if (!to || !id || this.state() === 'idle' || this.cancelledCallIds.has(id)) return;
-      void this.ws.sendCallSignal(
+      void this.sendSignal(
         {
           type: 'ice',
           toUserId: to,
           callId: id,
           candidate: e.candidate ? e.candidate.toJSON() : { candidate: '' }
-        },
-        () => this.callId() === id && this.state() !== 'idle' && !this.cancelledCallIds.has(id)
+        }
       );
     };
 
