@@ -32,7 +32,6 @@ export class CallService implements OnDestroy {
   private remoteAudio = new RemoteAudioPlayer();
   private callActiveAt: number | null = null;
   private cancelledCallIds = new Set<string>();
-  private blockedCallers = new Map<string, number>();
   private callSession = 0;
 
   private readonly iceServers: RTCIceServer[] = [
@@ -74,8 +73,8 @@ export class CallService implements OnDestroy {
       await this.ws.ensureConnected();
       await this.remoteAudio.unlockPlayback();
       await this.createPeerConnection();
+      await this.addLocalAudioTracks();
 
-      // Send offer immediately so the other user rings — don't wait for mic permission.
       const offer = await this.pc!.createOffer({ offerToReceiveAudio: true });
       await this.pc!.setLocalDescription(offer);
       if (!this.canSendForSession(session, id)) return;
@@ -85,18 +84,14 @@ export class CallService implements OnDestroy {
           type: 'offer',
           toUserId,
           callId: id,
-          sdp: this.pc!.localDescription ?? offer
+          sdp: this.toSdpInit(this.pc!.localDescription ?? offer)
         },
         () => this.canSendForSession(session, id)
       );
-      if (!sent || !this.canSendForSession(session, id)) return;
-
-      // Mic can attach after the ring signal is already on its way.
-      void this.addLocalAudioTracks().catch(() => {
-        if (this.callSession === session) {
-          this.error.set('Microphone unavailable.');
-        }
-      });
+      if (!sent || !this.canSendForSession(session, id)) {
+        this.error.set('Could not reach friend. Check connection and try again.');
+        this.cleanup('failed');
+      }
     } catch {
       if (this.callSession === session) {
         this.error.set('Could not start call. Allow microphone access.');
@@ -132,7 +127,7 @@ export class CallService implements OnDestroy {
           type: 'answer',
           toUserId: remoteId,
           callId,
-          sdp: this.pc.localDescription ?? answer
+          sdp: this.toSdpInit(this.pc.localDescription ?? answer)
         },
         () => this.canSendForSession(session, callId)
       );
@@ -248,9 +243,6 @@ export class CallService implements OnDestroy {
         break;
       case 'reject':
       case 'hangup':
-        if (sig.fromUserId) {
-          this.blockCaller(sig.fromUserId);
-        }
         if (sig.callId) {
           this.rememberCancelledCall(sig.callId);
         }
@@ -265,13 +257,14 @@ export class CallService implements OnDestroy {
     if (sig.callId && this.cancelledCallIds.has(sig.callId)) {
       return true;
     }
-    if (sig.fromUserId && this.isCallerBlocked(sig.fromUserId)) {
-      return true;
-    }
     if (sig.sentAt && Date.now() - sig.sentAt > MAX_OFFER_AGE_MS) {
       return true;
     }
     return false;
+  }
+
+  private toSdpInit(desc: RTCSessionDescription | RTCSessionDescriptionInit): RTCSessionDescriptionInit {
+    return { type: desc.type as RTCSdpType, sdp: desc.sdp ?? '' };
   }
 
   private async createPeerConnection(): Promise<void> {
@@ -384,25 +377,6 @@ export class CallService implements OnDestroy {
   private rememberCancelledCall(callId: string): void {
     this.cancelledCallIds.add(callId);
     setTimeout(() => this.cancelledCallIds.delete(callId), 120_000);
-  }
-
-  private blockCaller(userId: string, ms = 60_000): void {
-    this.blockedCallers.set(userId, Date.now() + ms);
-    setTimeout(() => {
-      if (this.blockedCallers.get(userId)! <= Date.now()) {
-        this.blockedCallers.delete(userId);
-      }
-    }, ms + 1000);
-  }
-
-  private isCallerBlocked(userId: string): boolean {
-    const until = this.blockedCallers.get(userId);
-    if (!until) return false;
-    if (Date.now() > until) {
-      this.blockedCallers.delete(userId);
-      return false;
-    }
-    return true;
   }
 
   private cleanup(endReason: CallEndReason = 'remote', bumpSession = true): void {

@@ -110,6 +110,14 @@ export class WebSocketService implements OnDestroy {
       heartbeatOutgoing: 10000,
       onConnect: () => {
         this.connected.next(true);
+        // STOMP auto-reconnect drops subscriptions — always re-subscribe.
+        this.friendRequestsSubscribed = false;
+        this.friendMessagesSubscribed = false;
+        this.callsSubscribed = false;
+        this.friendAcceptedSubscribed = false;
+        this.partnerLeftSubscribed = false;
+        this.matchFoundSubscribed = false;
+        this.partnerSearchingSubscribed = false;
         this.subscribeFriendRequestsInternal();
         this.subscribeFriendMessagesInternal();
         this.subscribeCallsInternal();
