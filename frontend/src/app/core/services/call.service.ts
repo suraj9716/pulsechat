@@ -24,7 +24,6 @@ export class CallService implements OnDestroy {
   private wsSub: { unsubscribe: () => void } | null = null;
   private ringtone = new CallRingtonePlayer();
   private remoteAudio = new RemoteAudioPlayer();
-  private recvTransceiver: RTCRtpTransceiver | null = null;
   private callActiveAt: number | null = null;
 
   private readonly iceServers: RTCIceServer[] = [
@@ -60,8 +59,9 @@ export class CallService implements OnDestroy {
     this.state.set('outgoing');
     void this.ringtone.startOutgoing();
     try {
-      await this.createPeerConnection(true);
-      const offer = await this.pc!.createOffer({ offerToReceiveAudio: true });
+      await this.createPeerConnection();
+      await this.addLocalAudioTracks();
+      const offer = await this.pc!.createOffer();
       await this.pc!.setLocalDescription(offer);
       await waitIceGathering(this.pc!);
       this.ws.sendCallSignal({
@@ -82,7 +82,7 @@ export class CallService implements OnDestroy {
     this.ringtone.stop();
     try {
       await this.addLocalAudioTracks();
-      const answer = await this.pc.createAnswer({ offerToReceiveAudio: true });
+      const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
       await waitIceGathering(this.pc);
       this.ws.sendCallSignal({
@@ -93,10 +93,7 @@ export class CallService implements OnDestroy {
       });
       this.markCallActive();
       await this.flushCandidates();
-      const remote = this.remoteStream();
-      if (remote) {
-        void this.remoteAudio.play(remote);
-      }
+      await this.playRemoteAudio();
     } catch {
       this.error.set('Could not answer call.');
       this.rejectCall();
@@ -126,6 +123,13 @@ export class CallService implements OnDestroy {
     this.state.set('active');
   }
 
+  private async playRemoteAudio(): Promise<void> {
+    const remote = this.remoteStream();
+    if (remote) {
+      await this.remoteAudio.play(remote);
+    }
+  }
+
   private async handleSignal(sig: CallSignal): Promise<void> {
     switch (sig.type) {
       case 'offer':
@@ -138,7 +142,7 @@ export class CallService implements OnDestroy {
         this.remoteUsername.set(sig.fromUsername ?? 'Friend');
         this.state.set('incoming');
         void this.ringtone.startIncoming();
-        await this.createPeerConnection(false);
+        await this.createPeerConnection();
         if (sig.sdp) {
           await this.pc!.setRemoteDescription(new RTCSessionDescription(sig.sdp));
         }
@@ -149,6 +153,7 @@ export class CallService implements OnDestroy {
           await this.pc.setRemoteDescription(new RTCSessionDescription(sig.sdp));
           this.markCallActive();
           await this.flushCandidates();
+          await this.playRemoteAudio();
         }
         break;
       case 'ice':
@@ -170,13 +175,9 @@ export class CallService implements OnDestroy {
     }
   }
 
-  private async createPeerConnection(withLocalMic: boolean): Promise<void> {
+  private async createPeerConnection(): Promise<void> {
     if (this.pc) return;
     this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
-
-    this.recvTransceiver = this.pc.addTransceiver('audio', {
-      direction: withLocalMic ? 'sendrecv' : 'recvonly'
-    });
 
     this.pc.onicecandidate = (e) => {
       const to = this.remoteUserId();
@@ -203,10 +204,6 @@ export class CallService implements OnDestroy {
         this.cleanup('failed');
       }
     };
-
-    if (withLocalMic) {
-      await this.addLocalAudioTracks();
-    }
   }
 
   private async addLocalAudioTracks(): Promise<void> {
@@ -222,12 +219,7 @@ export class CallService implements OnDestroy {
     const audioTrack = stream.getAudioTracks()[0];
     if (!audioTrack) return;
 
-    if (this.recvTransceiver && this.recvTransceiver.sender.track == null) {
-      await this.recvTransceiver.sender.replaceTrack(audioTrack);
-      this.recvTransceiver.direction = 'sendrecv';
-    } else {
-      this.pc.addTrack(audioTrack, stream);
-    }
+    this.pc.addTrack(audioTrack, stream);
   }
 
   private async flushCandidates(): Promise<void> {
@@ -268,7 +260,6 @@ export class CallService implements OnDestroy {
     this.localStream()?.getTracks().forEach((t) => t.stop());
     this.pc?.close();
     this.pc = null;
-    this.recvTransceiver = null;
     this.pendingCandidates = [];
     this.callActiveAt = null;
 
