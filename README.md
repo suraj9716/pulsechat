@@ -136,7 +136,8 @@ pulsechat/
 
 ## Deploy
 
-See [docs/PROJECT_FLOW.md#deployment-overview](docs/PROJECT_FLOW.md#deployment-overview) for free hosting options (Oracle Cloud VPS, Render + Vercel, etc.).
+- **Render:** [docs/RENDER_DEPLOY.md](docs/RENDER_DEPLOY.md) — fix Dockerfile path, backend + frontend steps
+- **Architecture:** [docs/PROJECT_FLOW.md](docs/PROJECT_FLOW.md)
 
 ---
 
