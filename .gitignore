@@ -1,0 +1,35 @@
+# Backend
+backend/target/
+backend/logs/
+backend/*.log
+backend/.classpath
+backend/.project
+backend/.settings/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.angular/
+frontend/.vscode/
+
+# IDE / OS
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Secrets & env
+.env
+.env.*
+!.env.example
+
+# Uploads (runtime)
+uploads/
+backend/uploads/
+
+# Misc
+*.class
+*.jar
+*.war
+*.log

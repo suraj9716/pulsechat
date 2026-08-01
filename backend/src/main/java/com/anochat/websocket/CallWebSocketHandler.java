@@ -1,0 +1,63 @@
+package com.anochat.websocket;
+
+import com.anochat.repository.FriendshipRepository;
+import com.anochat.repository.UserRepository;
+import com.anochat.security.UserPrincipal;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.messaging.handler.annotation.MessageMapping;
+import org.springframework.messaging.handler.annotation.Payload;
+import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+import org.springframework.security.core.Authentication;
+import org.springframework.stereotype.Controller;
+
+import java.util.Map;
+import java.util.UUID;
+
+@Controller
+@RequiredArgsConstructor
+@Slf4j
+public class CallWebSocketHandler {
+
+    private final SimpMessagingTemplate messagingTemplate;
+    private final UserRepository userRepository;
+    private final FriendshipRepository friendshipRepository;
+
+    @MessageMapping("/call/signal")
+    public void relaySignal(@Payload Map<String, Object> payload, SimpMessageHeaderAccessor accessor) {
+        UserPrincipal principal = resolvePrincipal(accessor);
+        if (principal == null) return;
+
+        Object toRaw = payload.get("toUserId");
+        if (toRaw == null) return;
+
+        UUID toUserId;
+        try {
+            toUserId = UUID.fromString(toRaw.toString());
+        } catch (IllegalArgumentException e) {
+            return;
+        }
+
+        if (!friendshipRepository.existsByUserPair(principal.getId(), toUserId)) {
+            log.warn("Call signal blocked: users are not friends");
+            return;
+        }
+
+        var target = userRepository.findById(toUserId).orElse(null);
+        if (target == null) return;
+
+        payload.put("fromUserId", principal.getId().toString());
+        payload.put("fromUsername", principal.getUsername());
+        messagingTemplate.convertAndSendToUser(target.getUsername(), RealtimeNotificationService.QUEUE_CALLS, payload);
+    }
+
+    private UserPrincipal resolvePrincipal(SimpMessageHeaderAccessor accessor) {
+        if (accessor == null || accessor.getUser() == null) return null;
+        if (accessor.getUser() instanceof Authentication auth
+                && auth.getPrincipal() instanceof UserPrincipal p) {
+            return p;
+        }
+        return null;
+    }
+}

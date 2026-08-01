@@ -1,0 +1,496 @@
+import { Injectable, OnDestroy } from '@angular/core';
+import { Client, IMessage } from '@stomp/stompjs';
+import SockJS from 'sockjs-client';
+import { BehaviorSubject, Observable, Subject, filter, map, take, timeout } from 'rxjs';
+import { environment } from '../../../environments/environment';
+import { AuthService } from './auth.service';
+import { ChatRoomResponse } from './chat-api.service';
+
+export interface ChatMessage {
+  id: string;
+  senderId: string;
+  receiverId: string;
+  chatRoomId: string;
+  content: string;
+  messageType?: 'TEXT' | 'IMAGE';
+  imageUrl?: string;
+  status: string;
+  timestamp: string;
+}
+
+export interface IncomingFriendRequest {
+  id: string;
+  sender: { id: string; username: string };
+  receiver: { id: string; username: string };
+  status: string;
+  createdAt: string;
+}
+
+export interface IncomingFriendMessage {
+  roomId: string;
+  senderId: string;
+  messageId: string;
+  preview: string;
+  timestamp: string;
+}
+
+export interface CallSignal {
+  type: 'offer' | 'answer' | 'ice' | 'hangup' | 'reject';
+  fromUserId: string;
+  fromUsername?: string;
+  toUserId: string;
+  callId: string;
+  sdp?: RTCSessionDescriptionInit;
+  candidate?: RTCIceCandidateInit;
+}
+
+export interface PartnerLeftEvent {
+  roomId: string;
+  leaverUsername: string;
+}
+
+@Injectable({ providedIn: 'root' })
+export class WebSocketService implements OnDestroy {
+  private client: Client | null = null;
+  private connected = new BehaviorSubject<boolean>(false);
+  private token: string | null = null;
+  private friendRequests = new Subject<IncomingFriendRequest>();
+  private friendMessages = new Subject<IncomingFriendMessage>();
+  private callSignals = new Subject<CallSignal>();
+  private friendAccepted = new Subject<{ friendId: string; friendUsername: string }>();
+  private partnerLeft = new Subject<PartnerLeftEvent>();
+  private matchFound = new Subject<ChatRoomResponse>();
+  private partnerSearching = new Subject<void>();
+  private friendRequestsSubscribed = false;
+  private friendMessagesSubscribed = false;
+  private callsSubscribed = false;
+  private friendAcceptedSubscribed = false;
+  private partnerLeftSubscribed = false;
+  private matchFoundSubscribed = false;
+  private partnerSearchingSubscribed = false;
+  private userFriendRequestTopics = new Set<string>();
+  private userFriendRequestUserId: string | null = null;
+  private userPartnerLeftTopics = new Set<string>();
+  private userPartnerLeftUserId: string | null = null;
+  private userMatchFoundTopics = new Set<string>();
+  private userMatchFoundUserId: string | null = null;
+  private userPartnerSearchingTopics = new Set<string>();
+  private userPartnerSearchingUserId: string | null = null;
+
+  connected$ = this.connected.asObservable();
+  friendRequest$ = this.friendRequests.asObservable();
+  friendMessage$ = this.friendMessages.asObservable();
+  callSignal$ = this.callSignals.asObservable();
+  friendAccepted$ = this.friendAccepted.asObservable();
+  partnerLeft$ = this.partnerLeft.asObservable();
+  matchFound$ = this.matchFound.asObservable();
+  partnerSearching$ = this.partnerSearching.asObservable();
+
+  constructor(private auth: AuthService) {}
+
+  connect(): void {
+    this.token = this.auth.getAccessToken();
+    if (!this.token) return;
+    if (this.client?.connected) return;
+
+    if (this.client) {
+      this.client.deactivate();
+      this.client = null;
+      this.connected.next(false);
+    }
+
+    this.client = new Client({
+      webSocketFactory: () => new SockJS(`${environment.apiUrl}/ws?token=${this.token}`),
+      connectHeaders: { Authorization: `Bearer ${this.token}` },
+      reconnectDelay: 3000,
+      heartbeatIncoming: 10000,
+      heartbeatOutgoing: 10000,
+      onConnect: () => {
+        this.connected.next(true);
+        this.subscribeFriendRequestsInternal();
+        this.subscribeFriendMessagesInternal();
+        this.subscribeCallsInternal();
+        if (this.userFriendRequestUserId) {
+          this.subscribeUserFriendRequestsInternal(this.userFriendRequestUserId);
+        }
+        if (this.userPartnerLeftUserId) {
+          this.subscribeUserPartnerLeftInternal(this.userPartnerLeftUserId);
+        }
+        if (this.userMatchFoundUserId) {
+          this.subscribeUserMatchFoundInternal(this.userMatchFoundUserId);
+        }
+        if (this.userPartnerSearchingUserId) {
+          this.subscribeUserPartnerSearchingInternal(this.userPartnerSearchingUserId);
+        }
+      },
+      onDisconnect: () => this.connected.next(false),
+      onWebSocketClose: () => this.connected.next(false),
+      onStompError: () => {
+        console.warn('STOMP error');
+        this.connected.next(false);
+      }
+    });
+    this.client.activate();
+  }
+
+  /** Reconnect after token refresh so subscriptions keep working. */
+  reconnect(): void {
+    if (this.client) {
+      this.client.deactivate();
+      this.client = null;
+      this.connected.next(false);
+    }
+    this.friendRequestsSubscribed = false;
+    this.friendMessagesSubscribed = false;
+    this.callsSubscribed = false;
+    this.friendAcceptedSubscribed = false;
+    this.partnerLeftSubscribed = false;
+    this.matchFoundSubscribed = false;
+    this.partnerSearchingSubscribed = false;
+    this.userFriendRequestTopics.clear();
+    this.userPartnerLeftTopics.clear();
+    this.userMatchFoundTopics.clear();
+    this.userPartnerSearchingTopics.clear();
+    this.connect();
+  }
+
+  disconnect(): void {
+    if (this.client) {
+      this.client.deactivate();
+      this.client = null;
+      this.connected.next(false);
+    }
+  }
+
+  /** Wait for STOMP handshake to complete, then run fn. */
+  private whenConnected<T>(fn: () => T, timeoutMs = 10000): Observable<T> {
+    return new Observable<T>((subscriber) => {
+      const doRun = () => {
+        try {
+          if (!this.client?.connected) {
+            throw new Error('No STOMP connection');
+          }
+          const result = fn();
+          subscriber.next(result);
+          subscriber.complete();
+        } catch (err) {
+          subscriber.error(err);
+        }
+      };
+      if (this.client?.connected) {
+        doRun();
+        return;
+      }
+      if (!this.client) {
+        this.connect();
+      }
+      const sub = this.connected$.pipe(
+        filter((v) => v === true),
+        take(1),
+        timeout(timeoutMs)
+      ).subscribe({
+        next: () => doRun(),
+        error: (e) => subscriber.error(e)
+      });
+      return () => sub.unsubscribe();
+    });
+  }
+
+  sendMessage(roomId: string, content: string, imageUrl?: string, messageType: 'TEXT' | 'IMAGE' = 'TEXT'): Observable<void> {
+    if (!this.client) this.connect();
+    const body: Record<string, string> = { messageType };
+    if (content) body['content'] = content;
+    if (imageUrl) body['imageUrl'] = imageUrl;
+    return this.whenConnected(() => {
+      this.client!.publish({
+        destination: `/app/chat/${roomId}/send`,
+        body: JSON.stringify(body)
+      });
+    }).pipe(map(() => undefined));
+  }
+
+  subscribeFriendRequests(): Observable<IncomingFriendRequest> {
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribeFriendRequestsInternal()).subscribe();
+    return this.friendRequest$;
+  }
+
+  subscribeUserFriendRequests(userId?: string | null): Observable<IncomingFriendRequest> {
+    if (userId) {
+      this.userFriendRequestUserId = userId;
+    }
+    if (!this.userFriendRequestUserId) return this.friendRequest$;
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribeUserFriendRequestsInternal(this.userFriendRequestUserId!)).subscribe();
+    return this.friendRequest$;
+  }
+
+  subscribeFriendMessages(): Observable<IncomingFriendMessage> {
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribeFriendMessagesInternal()).subscribe();
+    return this.friendMessage$;
+  }
+
+  subscribeFriendAccepted(): Observable<{ friendId: string; friendUsername: string }> {
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribeFriendAcceptedInternal()).subscribe();
+    return this.friendAccepted$;
+  }
+
+  subscribePartnerLeft(): Observable<PartnerLeftEvent> {
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribePartnerLeftInternal()).subscribe();
+    return this.partnerLeft$;
+  }
+
+  subscribeUserPartnerLeft(userId?: string | null): Observable<PartnerLeftEvent> {
+    if (userId) {
+      this.userPartnerLeftUserId = userId;
+    }
+    if (!this.userPartnerLeftUserId) return this.partnerLeft$;
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribeUserPartnerLeftInternal(this.userPartnerLeftUserId!)).subscribe();
+    return this.partnerLeft$;
+  }
+
+  subscribeMatchFound(): Observable<ChatRoomResponse> {
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribeMatchFoundInternal()).subscribe();
+    return this.matchFound$;
+  }
+
+  subscribeUserMatchFound(userId?: string | null): Observable<ChatRoomResponse> {
+    if (userId) {
+      this.userMatchFoundUserId = userId;
+    }
+    if (!this.userMatchFoundUserId) return this.matchFound$;
+    if (!this.client) this.connect();
+    this.whenConnected(() => {
+      this.subscribeMatchFoundInternal();
+      this.subscribeUserMatchFoundInternal(this.userMatchFoundUserId!);
+    }).subscribe();
+    return this.matchFound$;
+  }
+
+  subscribePartnerSearching(): Observable<void> {
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribePartnerSearchingInternal()).subscribe();
+    return this.partnerSearching$;
+  }
+
+  subscribeUserPartnerSearching(userId?: string | null): Observable<void> {
+    if (userId) {
+      this.userPartnerSearchingUserId = userId;
+    }
+    if (!this.userPartnerSearchingUserId) return this.partnerSearching$;
+    if (!this.client) this.connect();
+    this.whenConnected(() => {
+      this.subscribePartnerSearchingInternal();
+      this.subscribeUserPartnerSearchingInternal(this.userPartnerSearchingUserId!);
+    }).subscribe();
+    return this.partnerSearching$;
+  }
+
+  subscribeCalls(): Observable<CallSignal> {
+    if (!this.client) this.connect();
+    this.whenConnected(() => this.subscribeCallsInternal()).subscribe();
+    return this.callSignal$;
+  }
+
+  sendCallSignal(payload: Partial<CallSignal> & { type: CallSignal['type']; toUserId: string; callId: string }): void {
+    if (!this.client?.connected) return;
+    this.client.publish({
+      destination: '/app/call/signal',
+      body: JSON.stringify(payload)
+    });
+  }
+
+  private subscribeFriendRequestsInternal(): void {
+    if (!this.client?.connected || this.friendRequestsSubscribed) return;
+    this.client.subscribe('/user/queue/friend-requests', (msg: IMessage) => {
+      try {
+        this.friendRequests.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse friend request failed', e);
+      }
+    });
+    this.friendRequestsSubscribed = true;
+  }
+
+  private subscribeUserFriendRequestsInternal(userId: string): void {
+    if (!this.client?.connected || this.userFriendRequestTopics.has(userId)) return;
+    this.client.subscribe(`/topic/user/${userId}/friend-requests`, (msg: IMessage) => {
+      try {
+        this.friendRequests.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse friend request topic failed', e);
+      }
+    });
+    this.userFriendRequestTopics.add(userId);
+  }
+
+  private subscribeFriendMessagesInternal(): void {
+    if (!this.client?.connected || this.friendMessagesSubscribed) return;
+    this.client.subscribe('/user/queue/friend-messages', (msg: IMessage) => {
+      try {
+        this.friendMessages.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse friend message notification failed', e);
+      }
+    });
+    this.friendMessagesSubscribed = true;
+  }
+
+  private subscribeFriendAcceptedInternal(): void {
+    if (!this.client?.connected || this.friendAcceptedSubscribed) return;
+    this.client.subscribe('/user/queue/friend-accepted', (msg: IMessage) => {
+      try {
+        this.friendAccepted.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse friend accepted failed', e);
+      }
+    });
+    this.friendAcceptedSubscribed = true;
+  }
+
+  private subscribePartnerLeftInternal(): void {
+    if (!this.client?.connected || this.partnerLeftSubscribed) return;
+    this.client.subscribe('/user/queue/partner-left', (msg: IMessage) => {
+      try {
+        this.partnerLeft.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse partner left failed', e);
+      }
+    });
+    this.partnerLeftSubscribed = true;
+  }
+
+  private subscribeUserPartnerLeftInternal(userId: string): void {
+    if (!this.client?.connected || this.userPartnerLeftTopics.has(userId)) return;
+    this.client.subscribe(`/topic/user/${userId}/partner-left`, (msg: IMessage) => {
+      try {
+        this.partnerLeft.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse partner left topic failed', e);
+      }
+    });
+    this.userPartnerLeftTopics.add(userId);
+  }
+
+  private subscribeMatchFoundInternal(): void {
+    if (!this.client?.connected || this.matchFoundSubscribed) return;
+    this.client.subscribe('/user/queue/match-found', (msg: IMessage) => {
+      try {
+        this.matchFound.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse match found failed', e);
+      }
+    });
+    this.matchFoundSubscribed = true;
+  }
+
+  private subscribeUserMatchFoundInternal(userId: string): void {
+    if (!this.client?.connected || this.userMatchFoundTopics.has(userId)) return;
+    this.client.subscribe(`/topic/user/${userId}/match-found`, (msg: IMessage) => {
+      try {
+        this.matchFound.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse match found topic failed', e);
+      }
+    });
+    this.userMatchFoundTopics.add(userId);
+  }
+
+  private subscribePartnerSearchingInternal(): void {
+    if (!this.client?.connected || this.partnerSearchingSubscribed) return;
+    this.client.subscribe('/user/queue/partner-searching', (msg: IMessage) => {
+      try {
+        this.partnerSearching.next();
+      } catch (e) {
+        console.warn('Parse partner searching failed', e);
+      }
+    });
+    this.partnerSearchingSubscribed = true;
+  }
+
+  private subscribeUserPartnerSearchingInternal(userId: string): void {
+    if (!this.client?.connected || this.userPartnerSearchingTopics.has(userId)) return;
+    this.client.subscribe(`/topic/user/${userId}/partner-searching`, () => {
+      this.partnerSearching.next();
+    });
+    this.userPartnerSearchingTopics.add(userId);
+  }
+
+  private subscribeCallsInternal(): void {
+    if (!this.client?.connected || this.callsSubscribed) return;
+    this.client.subscribe('/user/queue/calls', (msg: IMessage) => {
+      try {
+        this.callSignals.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse call signal failed', e);
+      }
+    });
+    this.callsSubscribed = true;
+  }
+
+  sendTyping(roomId: string, typing: boolean): Observable<void> {
+    if (!this.client) this.connect();
+    return this.whenConnected(() => {
+      this.client!.publish({
+        destination: `/app/chat/${roomId}/typing`,
+        body: JSON.stringify({ typing })
+      });
+    }).pipe(map(() => undefined));
+  }
+
+  subscribeToRoom(roomId: string): Observable<ChatMessage> {
+    const subject = new Subject<ChatMessage>();
+    if (!this.client) this.connect();
+
+    this.whenConnected(() => {
+      if (!this.client) throw new Error('No STOMP client');
+      this.client.subscribe(`/topic/room/${roomId}`, (msg: IMessage) => {
+        try {
+          subject.next(JSON.parse(msg.body));
+        } catch (e) {
+          console.warn('Parse message failed', e);
+        }
+      });
+    }).subscribe({
+      error: (e) => {
+        console.warn('WebSocket not connected for subscribeToRoom', e);
+        subject.error(e);
+      }
+    });
+
+    return subject.asObservable();
+  }
+
+  subscribeToTyping(roomId: string): Observable<{ userId: string; typing: boolean }> {
+    const subject = new Subject<{ userId: string; typing: boolean }>();
+    if (!this.client) this.connect();
+
+    this.whenConnected(() => {
+      if (!this.client) throw new Error('No STOMP client');
+      this.client.subscribe(`/topic/room/${roomId}/typing`, (msg: IMessage) => {
+        try {
+          const body = JSON.parse(msg.body);
+          subject.next({ userId: body.userId, typing: body.typing !== false });
+        } catch (e) {
+          console.warn('Parse typing failed', e);
+        }
+      });
+    }).subscribe({
+      error: (e) => {
+        console.warn('WebSocket not connected for subscribeToTyping', e);
+        subject.error(e);
+      }
+    });
+
+    return subject.asObservable();
+  }
+
+  ngOnDestroy(): void {
+    this.disconnect();
+  }
+}

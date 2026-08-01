@@ -1,0 +1,3 @@
+ALTER TABLE anon.messages ADD COLUMN message_type VARCHAR(20) NOT NULL DEFAULT 'TEXT';
+ALTER TABLE anon.messages ADD COLUMN image_url VARCHAR(512);
+ALTER TABLE anon.messages ALTER COLUMN content DROP NOT NULL;
