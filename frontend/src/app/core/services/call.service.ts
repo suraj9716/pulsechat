@@ -19,9 +19,12 @@ export class CallService implements OnDestroy {
   localStream = signal<MediaStream | null>(null);
   remoteStream = signal<MediaStream | null>(null);
   error = signal<string | null>(null);
+  speakerOn = signal(false);
+  speakerSupported = signal(false);
 
   private pc: RTCPeerConnection | null = null;
   private pendingCandidates: RTCIceCandidateInit[] = [];
+  private pendingRemoteDescription: RTCSessionDescriptionInit | null = null;
   private wsSub: { unsubscribe: () => void } | null = null;
   private ringtone = new CallRingtonePlayer();
   private remoteAudio = new RemoteAudioPlayer();
@@ -36,7 +39,9 @@ export class CallService implements OnDestroy {
     private ws: WebSocketService,
     private chatApi: ChatApiService,
     private messageNotification: MessageNotificationService
-  ) {}
+  ) {
+    this.speakerSupported.set(this.remoteAudio.isSpeakerSupported());
+  }
 
   ngOnDestroy(): void {
     this.cleanup('failed');
@@ -61,9 +66,10 @@ export class CallService implements OnDestroy {
     this.state.set('outgoing');
     void this.ringtone.startOutgoing();
     try {
+      await this.remoteAudio.unlockPlayback();
       await this.createPeerConnection();
       await this.addLocalAudioTracks();
-      const offer = await this.pc!.createOffer();
+      const offer = await this.pc!.createOffer({ offerToReceiveAudio: true });
       await this.pc!.setLocalDescription(offer);
       await waitIceGathering(this.pc!);
       this.ws.sendCallSignal({
@@ -84,6 +90,12 @@ export class CallService implements OnDestroy {
     this.ringtone.stop();
     this.messageNotification.dismissCallNotification(this.callId());
     try {
+      await this.remoteAudio.unlockPlayback();
+      if (this.pendingRemoteDescription) {
+        await this.pc.setRemoteDescription(new RTCSessionDescription(this.pendingRemoteDescription));
+        this.pendingRemoteDescription = null;
+        await this.flushCandidates();
+      }
       await this.addLocalAudioTracks();
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
@@ -100,6 +112,13 @@ export class CallService implements OnDestroy {
     } catch {
       this.error.set('Could not answer call.');
       this.rejectCall();
+    }
+  }
+
+  async toggleSpeaker(): Promise<void> {
+    const ok = await this.remoteAudio.toggleSpeaker();
+    if (ok) {
+      this.speakerOn.set(this.remoteAudio.isSpeakerOn());
     }
   }
 
@@ -146,10 +165,8 @@ export class CallService implements OnDestroy {
         this.state.set('incoming');
         void this.ringtone.startIncoming();
         this.messageNotification.notifyIncomingCall(sig);
+        this.pendingRemoteDescription = sig.sdp ?? null;
         await this.createPeerConnection();
-        if (sig.sdp) {
-          await this.pc!.setRemoteDescription(new RTCSessionDescription(sig.sdp));
-        }
         break;
       case 'answer':
         if (this.state() === 'outgoing' && sig.sdp && this.pc) {
@@ -158,6 +175,7 @@ export class CallService implements OnDestroy {
           this.markCallActive();
           await this.flushCandidates();
           await this.playRemoteAudio();
+          setTimeout(() => void this.playRemoteAudio(), 500);
         }
         break;
       case 'ice':
@@ -197,13 +215,18 @@ export class CallService implements OnDestroy {
     };
 
     this.pc.ontrack = (e) => {
+      if (e.track.kind !== 'audio') return;
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       this.remoteStream.set(stream);
       void this.remoteAudio.play(stream);
     };
 
     this.pc.onconnectionstatechange = () => {
-      if (this.pc?.connectionState === 'failed' || this.pc?.connectionState === 'disconnected') {
+      const state = this.pc?.connectionState;
+      if (state === 'connected') {
+        void this.playRemoteAudio();
+      }
+      if (state === 'failed' || state === 'disconnected') {
         this.error.set('Call connection lost.');
         this.cleanup('failed');
       }
@@ -212,10 +235,12 @@ export class CallService implements OnDestroy {
 
   private async addLocalAudioTracks(): Promise<void> {
     if (!this.pc) return;
-    if (this.localStream()) return;
+
+    const existingSender = this.pc.getSenders().find((s) => s.track?.kind === 'audio');
+    if (existingSender?.track) return;
 
     const stream = await navigator.mediaDevices.getUserMedia({
-      audio: { echoCancellation: true, noiseSuppression: true },
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: false
     });
     this.localStream.set(stream);
@@ -223,7 +248,16 @@ export class CallService implements OnDestroy {
     const audioTrack = stream.getAudioTracks()[0];
     if (!audioTrack) return;
 
-    this.pc.addTrack(audioTrack, stream);
+    const recvTransceiver = this.pc.getTransceivers().find(
+      (t) => t.receiver.track?.kind === 'audio' || (t.mid && t.direction.includes('recv'))
+    );
+
+    if (recvTransceiver && !recvTransceiver.sender.track) {
+      await recvTransceiver.sender.replaceTrack(audioTrack);
+      recvTransceiver.direction = 'sendrecv';
+    } else if (!existingSender) {
+      this.pc.addTrack(audioTrack, stream);
+    }
   }
 
   private async flushCandidates(): Promise<void> {
@@ -262,10 +296,12 @@ export class CallService implements OnDestroy {
 
     this.ringtone.stop();
     this.remoteAudio.stop();
+    this.speakerOn.set(false);
 
     this.localStream()?.getTracks().forEach((t) => t.stop());
     this.pc?.close();
     this.pc = null;
+    this.pendingRemoteDescription = null;
     this.pendingCandidates = [];
     this.callActiveAt = null;
 

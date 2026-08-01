@@ -59,6 +59,7 @@ export class MessageNotificationService implements OnDestroy {
     this.activeCallTag = tag;
 
     void this.vibrate([400, 200, 400, 200, 400, 200, 800]);
+    document.title = `📞 Call from ${name} — ${this.baseTitle}`;
     void this.show(
       '📞 Incoming call',
       `${name} is calling you`,
@@ -69,7 +70,7 @@ export class MessageNotificationService implements OnDestroy {
         vibrate: [400, 200, 400, 200, 400, 200, 800],
         data: { url: '/', type: 'call', callId: sig.callId }
       },
-      document.visibilityState !== 'visible'
+      true
     );
   }
 

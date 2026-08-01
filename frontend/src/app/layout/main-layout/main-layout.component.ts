@@ -204,7 +204,21 @@ import { Subscription } from 'rxjs';
 
             <p>{{ call.state() === 'outgoing' ? 'Calling' : 'On call with' }} <strong>{{ call.remoteUsername() }}</strong></p>
 
-            <button mat-fab color="warn" (click)="hangUp()"><mat-icon>call_end</mat-icon></button>
+            <div class="call-actions">
+
+              @if (call.speakerSupported()) {
+
+                <button mat-mini-fab (click)="toggleSpeaker()" [attr.aria-label]="call.speakerOn() ? 'Earpiece' : 'Speaker'">
+
+                  <mat-icon>{{ call.speakerOn() ? 'volume_up' : 'hearing' }}</mat-icon>
+
+                </button>
+
+              }
+
+              <button mat-fab color="warn" (click)="hangUp()"><mat-icon>call_end</mat-icon></button>
+
+            </div>
 
           </mat-card-content>
 
@@ -707,6 +721,12 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   hangUp(): void {
 
     this.callService.hangUp();
+
+  }
+
+  toggleSpeaker(): void {
+
+    void this.callService.toggleSpeaker();
 
   }
 
