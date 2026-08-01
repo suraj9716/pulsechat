@@ -130,7 +130,6 @@ export class MessageNotificationService implements OnDestroy {
       icon: '/favicon.ico',
       badge: '/favicon.ico',
       tag: 'pulsechat-notification',
-      renotify: true,
       data: { url }
     };
 
