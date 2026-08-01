@@ -208,6 +208,10 @@ import { Subscription } from 'rxjs';
 
             <p>{{ call.state() === 'outgoing' ? 'Calling' : 'On call with' }} <strong>{{ call.remoteUsername() }}</strong></p>
 
+            @if (call.error()) {
+              <p class="call-error">{{ call.error() }}</p>
+            }
+
             <div class="call-actions">
 
               <button mat-fab class="speaker-btn" (click)="toggleSpeaker()" [attr.aria-label]="call.speakerOn() ? 'Speaker on' : 'Speaker off'">
@@ -480,6 +484,8 @@ import { Subscription } from 'rxjs';
 
     .speaker-btn { background: #667eea; color: #fff; }
 
+    .call-error { color: #e53935; font-size: 14px; margin: 8px 0 0; }
+
     .menu-btn { margin-right: 4px; }
 
     @media (max-width: 959px) {
@@ -575,6 +581,18 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
       if (current && !pending.some((r) => r.id === current.id)) {
 
         this.incomingRequest.set(null);
+
+      }
+
+    });
+
+    effect(() => {
+
+      const msg = this.callService.error();
+
+      if (msg) {
+
+        this.snackBar.open(msg, 'OK', { duration: 6000 });
 
       }
 

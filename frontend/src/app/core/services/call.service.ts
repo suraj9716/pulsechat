@@ -50,6 +50,9 @@ export class CallService implements OnDestroy {
   }
 
   startListening(userId?: string | null): void {
+    if (userId) {
+      this.ws.ensureUserCallSubscription(userId);
+    }
     if (this.wsSub) return;
     this.wsSub = this.ws.subscribeCalls(userId).subscribe((sig) => {
       void this.handleSignal(sig);
@@ -57,7 +60,10 @@ export class CallService implements OnDestroy {
   }
 
   async startCall(toUserId: string, toUsername: string): Promise<void> {
-    if (this.state() !== 'idle') return;
+    if (this.state() !== 'idle') {
+      this.error.set('Already in a call.');
+      return;
+    }
     this.error.set(null);
     const id = crypto.randomUUID();
     const session = ++this.callSession;
@@ -68,14 +74,24 @@ export class CallService implements OnDestroy {
     void this.ringtone.startOutgoing();
 
     try {
-      await this.ws.ensureConnected();
+      try {
+        await this.ws.ensureConnected(15000);
+      } catch {
+        this.error.set('Cannot connect to server. Check internet and refresh the page.');
+        this.cleanup('failed');
+        return;
+      }
       await this.remoteAudio.unlockPlayback();
       await this.createPeerConnection();
       await this.addLocalAudioTracks();
 
       const offer = await this.pc!.createOffer({ offerToReceiveAudio: true });
       await this.pc!.setLocalDescription(offer);
-      if (!this.canSendForSession(session, id)) return;
+      if (!this.canSendForSession(session, id)) {
+        this.error.set('Call was cancelled.');
+        this.cleanup('failed');
+        return;
+      }
 
       const sent = await this.ws.sendCallSignal({
         type: 'offer',
@@ -84,7 +100,7 @@ export class CallService implements OnDestroy {
         sdp: this.toSdpInit(this.pc!.localDescription ?? offer)
       });
       if (!sent || !this.canSendForSession(session, id)) {
-        this.error.set('Could not reach friend. Check connection and try again.');
+        this.error.set('Could not reach friend. Ask them to open PulseChat and stay logged in.');
         this.cleanup('failed');
       }
     } catch {

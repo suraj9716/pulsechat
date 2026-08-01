@@ -10,6 +10,7 @@ import org.springframework.messaging.handler.annotation.Payload;
 import org.springframework.messaging.simp.SimpMessageHeaderAccessor;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Controller;
 
 import java.util.Map;
@@ -27,7 +28,10 @@ public class CallWebSocketHandler {
     @MessageMapping("/call/signal")
     public void relaySignal(@Payload Map<String, Object> payload, SimpMessageHeaderAccessor accessor) {
         UserPrincipal principal = resolvePrincipal(accessor);
-        if (principal == null) return;
+        if (principal == null) {
+            log.warn("Call signal dropped: WebSocket not authenticated");
+            return;
+        }
 
         Object toRaw = payload.get("toUserId");
         if (toRaw == null) return;
@@ -59,9 +63,12 @@ public class CallWebSocketHandler {
     }
 
     private UserPrincipal resolvePrincipal(SimpMessageHeaderAccessor accessor) {
-        if (accessor == null || accessor.getUser() == null) return null;
-        if (accessor.getUser() instanceof Authentication auth
+        if (accessor != null && accessor.getUser() instanceof Authentication auth
                 && auth.getPrincipal() instanceof UserPrincipal p) {
+            return p;
+        }
+        Authentication ctxAuth = SecurityContextHolder.getContext().getAuthentication();
+        if (ctxAuth != null && ctxAuth.getPrincipal() instanceof UserPrincipal p) {
             return p;
         }
         return null;

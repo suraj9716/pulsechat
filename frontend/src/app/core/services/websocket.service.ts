@@ -327,6 +327,14 @@ export class WebSocketService implements OnDestroy {
     return this.callSignal$;
   }
 
+  /** Re-subscribe call topic when user id becomes available or after reconnect. */
+  ensureUserCallSubscription(userId: string): void {
+    this.userCallsUserId = userId;
+    if (this.client?.connected) {
+      this.subscribeUserCallsInternal(userId);
+    }
+  }
+
   sendCallSignal(
     payload: Partial<CallSignal> & { type: CallSignal['type']; toUserId: string; callId: string },
     guard?: () => boolean

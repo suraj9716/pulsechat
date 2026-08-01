@@ -104,9 +104,13 @@ export class MessageNotificationService implements OnDestroy {
   private async ensureServiceWorker(): Promise<void> {
     if (!('serviceWorker' in navigator)) return;
     try {
-      await navigator.serviceWorker.register('/sw.js');
+      await navigator.serviceWorker.register('/assets/sw.js');
     } catch {
-      /* offline or unsupported */
+      try {
+        await navigator.serviceWorker.register('/sw.js');
+      } catch {
+        /* offline or unsupported */
+      }
     }
   }
 
