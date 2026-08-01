@@ -77,24 +77,28 @@ public class MessageService {
                 .build();
         message = messageRepository.save(message);
         MessageResponse response = messageMapper.toResponse(message);
-        if (room.getRoomType() == RoomType.FRIEND) {
-            notifyFriendMessage(receiver, response);
-        }
+        User sender = userRepository.findById(senderId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", senderId));
+        notifyIncomingMessage(receiver, sender, response, room.getRoomType());
         return response;
     }
 
-    private void notifyFriendMessage(User receiver, MessageResponse msg) {
+    private void notifyIncomingMessage(User receiver, User sender, MessageResponse msg, RoomType roomType) {
+        if (msg.getMessageType() == MessageType.CALL) {
+            return;
+        }
         String preview = switch (msg.getMessageType()) {
             case IMAGE -> "📷 Photo";
-            case CALL -> msg.getContent() != null ? "📞 " + msg.getContent() : "📞 Voice call";
             default -> (msg.getContent() != null && !msg.getContent().isBlank() ? msg.getContent() : "Message");
         };
         notificationService.sendFriendMessage(receiver.getUsername(), Map.of(
                 "roomId", msg.getChatRoomId().toString(),
                 "senderId", msg.getSenderId().toString(),
+                "senderUsername", sender.getUsername(),
                 "messageId", msg.getId().toString(),
                 "preview", preview,
-                "timestamp", msg.getTimestamp().toString()
+                "timestamp", msg.getTimestamp().toString(),
+                "roomType", roomType.name()
         ));
     }
 

@@ -40,6 +40,8 @@ import { UnreadCountService } from '../../../core/services/unread-count.service'
 
 import { FriendNotificationService } from '../../../core/services/friend-notification.service';
 
+import { MessageNotificationService } from '../../../core/services/message-notification.service';
+
 import { SearchPartnerDialogComponent, SearchPartnerDialogData } from '../search-partner-dialog/search-partner-dialog.component';
 
 import { APP_NAME } from '../../../core/constants/app.constants';
@@ -1176,6 +1178,8 @@ export class ChatComponent implements OnInit, OnDestroy {
 
     private friendNotification: FriendNotificationService,
 
+    private messageNotification: MessageNotificationService,
+
     private router: Router,
 
     private snackBar: MatSnackBar
@@ -1263,6 +1267,8 @@ export class ChatComponent implements OnInit, OnDestroy {
 
 
   ngOnDestroy(): void {
+
+    this.messageNotification.setActiveRoom(null);
 
     this.sub?.unsubscribe();
 
@@ -1519,6 +1525,8 @@ export class ChatComponent implements OnInit, OnDestroy {
     this.sub?.unsubscribe();
 
     this.typingSub?.unsubscribe();
+
+    this.messageNotification.setActiveRoom(roomId);
 
     this.sub = this.ws.subscribeToRoom(roomId).subscribe({
 

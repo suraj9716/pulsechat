@@ -32,6 +32,8 @@ import { UnreadCountService } from '../../core/services/unread-count.service';
 
 import { FriendNotificationService } from '../../core/services/friend-notification.service';
 
+import { MessageNotificationService } from '../../core/services/message-notification.service';
+
 import { CallService } from '../../core/services/call.service';
 
 import { APP_NAME } from '../../core/constants/app.constants';
@@ -111,6 +113,14 @@ import { Subscription } from 'rxjs';
           Profile
 
         </a>
+
+        <button mat-menu-item (click)="enableNotifications()">
+
+          <mat-icon>notifications</mat-icon>
+
+          Enable notifications
+
+        </button>
 
         <button mat-menu-item (click)="logout()">
 
@@ -530,6 +540,8 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
 
     private friendNotification: FriendNotificationService,
 
+    private messageNotification: MessageNotificationService,
+
     public callService: CallService,
 
     private breakpoint: BreakpointObserver
@@ -571,6 +583,8 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
     this.unread.startListening();
 
     this.friendNotification.startListening();
+
+    this.messageNotification.startListening();
 
     this.callService.startListening();
 
@@ -661,6 +675,10 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   }
 
 
+
+  enableNotifications(): void {
+    void this.messageNotification.requestPermission();
+  }
 
   logout(): void {
 

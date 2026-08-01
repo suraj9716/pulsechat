@@ -28,6 +28,8 @@ import { WebSocketService, ChatMessage } from '../../../core/services/websocket.
 
 import { UnreadCountService } from '../../../core/services/unread-count.service';
 
+import { MessageNotificationService } from '../../../core/services/message-notification.service';
+
 import { FriendApiService } from '../../../core/services/friend-api.service';
 
 import { BlockApiService } from '../../../core/services/block-api.service';
@@ -686,6 +688,8 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
     private unread: UnreadCountService,
 
+    private messageNotification: MessageNotificationService,
+
     private friendApi: FriendApiService,
 
     private blockApi: BlockApiService,
@@ -723,6 +727,8 @@ export class FriendChatComponent implements OnInit, OnDestroy {
   ngOnDestroy(): void {
 
     this.unread.setActiveChat(null);
+
+    this.messageNotification.setActiveRoom(null);
 
     this.sub?.unsubscribe();
 
@@ -795,6 +801,8 @@ export class FriendChatComponent implements OnInit, OnDestroy {
   private subscribeToRoom(roomId: string): void {
 
     this.sub?.unsubscribe();
+
+    this.messageNotification.setActiveRoom(roomId);
 
     this.sub = this.ws.subscribeToRoom(roomId).subscribe({
 

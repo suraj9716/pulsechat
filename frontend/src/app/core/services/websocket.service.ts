@@ -29,9 +29,11 @@ export interface IncomingFriendRequest {
 export interface IncomingFriendMessage {
   roomId: string;
   senderId: string;
+  senderUsername?: string;
   messageId: string;
   preview: string;
   timestamp: string;
+  roomType?: 'FRIEND' | 'MATCHMAKING';
 }
 
 export interface CallSignal {

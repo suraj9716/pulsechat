@@ -1,0 +1,16 @@
+{
+  "name": "PulseChat",
+  "short_name": "PulseChat",
+  "description": "Anonymous real-time chat",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f0f2f8",
+  "theme_color": "#3f51b5",
+  "icons": [
+    {
+      "src": "favicon.ico",
+      "sizes": "48x48",
+      "type": "image/x-icon"
+    }
+  ]
+}
