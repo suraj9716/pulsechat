@@ -1,5 +1,5 @@
 export const environment = {
   production: true,
-  apiUrl: '', // set at deploy
-  wsUrl: ''  // set at deploy
+  apiUrl: 'https://pulsechat-backend1.onrender.com',
+  wsUrl: 'https://pulsechat-backend1.onrender.com/ws'
 };
