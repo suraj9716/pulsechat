@@ -10,9 +10,6 @@ export type CallState = 'idle' | 'outgoing' | 'incoming' | 'active';
 
 type CallEndReason = 'hangup' | 'reject' | 'remote' | 'failed';
 
-/** Reject offers older than this — covers delayed WebSocket delivery after hangup. */
-const MAX_OFFER_AGE_MS = 20_000;
-
 @Injectable({ providedIn: 'root' })
 export class CallService implements OnDestroy {
   state = signal<CallState>('idle');
@@ -33,6 +30,7 @@ export class CallService implements OnDestroy {
   private callActiveAt: number | null = null;
   private cancelledCallIds = new Set<string>();
   private callSession = 0;
+  private recentSignalKeys = new Set<string>();
 
   private readonly iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -51,9 +49,9 @@ export class CallService implements OnDestroy {
     this.remoteAudio.dispose();
   }
 
-  startListening(): void {
+  startListening(userId?: string | null): void {
     if (this.wsSub) return;
-    this.wsSub = this.ws.subscribeCalls().subscribe((sig) => {
+    this.wsSub = this.ws.subscribeCalls(userId).subscribe((sig) => {
       void this.handleSignal(sig);
     });
   }
@@ -79,15 +77,12 @@ export class CallService implements OnDestroy {
       await this.pc!.setLocalDescription(offer);
       if (!this.canSendForSession(session, id)) return;
 
-      const sent = await this.ws.sendCallSignal(
-        {
-          type: 'offer',
-          toUserId,
-          callId: id,
-          sdp: this.toSdpInit(this.pc!.localDescription ?? offer)
-        },
-        () => this.canSendForSession(session, id)
-      );
+      const sent = await this.ws.sendCallSignal({
+        type: 'offer',
+        toUserId,
+        callId: id,
+        sdp: this.toSdpInit(this.pc!.localDescription ?? offer)
+      });
       if (!sent || !this.canSendForSession(session, id)) {
         this.error.set('Could not reach friend. Check connection and try again.');
         this.cleanup('failed');
@@ -122,15 +117,12 @@ export class CallService implements OnDestroy {
       await this.pc.setLocalDescription(answer);
       if (!this.canSendForSession(session, callId)) return;
 
-      const sent = await this.ws.sendCallSignal(
-        {
-          type: 'answer',
-          toUserId: remoteId,
-          callId,
-          sdp: this.toSdpInit(this.pc.localDescription ?? answer)
-        },
-        () => this.canSendForSession(session, callId)
-      );
+      const sent = await this.ws.sendCallSignal({
+        type: 'answer',
+        toUserId: remoteId,
+        callId,
+        sdp: this.toSdpInit(this.pc.localDescription ?? answer)
+      });
       if (!sent) return;
 
       this.markCallActive();
@@ -190,16 +182,19 @@ export class CallService implements OnDestroy {
   }
 
   private async handleSignal(sig: CallSignal): Promise<void> {
+    if (!this.shouldProcessSignal(sig)) return;
+
     switch (sig.type) {
       case 'offer':
         if (this.shouldRejectOffer(sig)) {
-          this.ws.sendCallSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
+          void this.ws.sendCallSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
           return;
         }
         if (this.state() !== 'idle') {
-          this.ws.sendCallSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
+          void this.ws.sendCallSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
           return;
         }
+        this.callSession++;
         this.callId.set(sig.callId);
         this.remoteUserId.set(sig.fromUserId);
         this.remoteUsername.set(sig.fromUsername ?? 'Friend');
@@ -253,14 +248,17 @@ export class CallService implements OnDestroy {
     }
   }
 
+  private shouldProcessSignal(sig: CallSignal): boolean {
+    const candidate = sig.candidate?.candidate ?? '';
+    const key = `${sig.type}:${sig.callId}:${sig.fromUserId}:${candidate}`;
+    if (this.recentSignalKeys.has(key)) return false;
+    this.recentSignalKeys.add(key);
+    setTimeout(() => this.recentSignalKeys.delete(key), 3000);
+    return true;
+  }
+
   private shouldRejectOffer(sig: CallSignal): boolean {
-    if (sig.callId && this.cancelledCallIds.has(sig.callId)) {
-      return true;
-    }
-    if (sig.sentAt && Date.now() - sig.sentAt > MAX_OFFER_AGE_MS) {
-      return true;
-    }
-    return false;
+    return !!(sig.callId && this.cancelledCallIds.has(sig.callId));
   }
 
   private toSdpInit(desc: RTCSessionDescription | RTCSessionDescriptionInit): RTCSessionDescriptionInit {

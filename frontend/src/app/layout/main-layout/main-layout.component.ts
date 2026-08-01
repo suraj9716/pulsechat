@@ -604,7 +604,7 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
 
     this.messageNotification.startListening();
 
-    this.callService.startListening();
+    this.callService.startListening(this.auth.user()?.id ?? null);
 
     this.unread.refreshFromOverview();
 

@@ -40,16 +40,22 @@ public class CallWebSocketHandler {
         }
 
         if (!friendshipRepository.existsByUserPair(principal.getId(), toUserId)) {
-            log.warn("Call signal blocked: users are not friends");
+            log.warn("Call signal blocked: users are not friends {} -> {}", principal.getId(), toUserId);
             return;
         }
 
         var target = userRepository.findById(toUserId).orElse(null);
-        if (target == null) return;
+        if (target == null) {
+            log.warn("Call signal blocked: target user not found {}", toUserId);
+            return;
+        }
 
         payload.put("fromUserId", principal.getId().toString());
         payload.put("fromUsername", principal.getUsername());
         messagingTemplate.convertAndSendToUser(target.getUsername(), RealtimeNotificationService.QUEUE_CALLS, payload);
+        // Topic fallback — user queue routing can miss sessions after reconnect (same as friend notifications).
+        messagingTemplate.convertAndSend(RealtimeNotificationService.TOPIC_USER_PREFIX + toUserId + "/calls", payload);
+        log.debug("Call signal {} relayed {} -> {}", payload.get("type"), principal.getId(), toUserId);
     }
 
     private UserPrincipal resolvePrincipal(SimpMessageHeaderAccessor accessor) {

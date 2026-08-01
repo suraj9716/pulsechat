@@ -79,6 +79,8 @@ export class WebSocketService implements OnDestroy {
   private userMatchFoundUserId: string | null = null;
   private userPartnerSearchingTopics = new Set<string>();
   private userPartnerSearchingUserId: string | null = null;
+  private userCallTopics = new Set<string>();
+  private userCallsUserId: string | null = null;
 
   connected$ = this.connected.asObservable();
   friendRequest$ = this.friendRequests.asObservable();
@@ -118,6 +120,11 @@ export class WebSocketService implements OnDestroy {
         this.partnerLeftSubscribed = false;
         this.matchFoundSubscribed = false;
         this.partnerSearchingSubscribed = false;
+        this.userFriendRequestTopics.clear();
+        this.userPartnerLeftTopics.clear();
+        this.userMatchFoundTopics.clear();
+        this.userPartnerSearchingTopics.clear();
+        this.userCallTopics.clear();
         this.subscribeFriendRequestsInternal();
         this.subscribeFriendMessagesInternal();
         this.subscribeCallsInternal();
@@ -132,6 +139,9 @@ export class WebSocketService implements OnDestroy {
         }
         if (this.userPartnerSearchingUserId) {
           this.subscribeUserPartnerSearchingInternal(this.userPartnerSearchingUserId);
+        }
+        if (this.userCallsUserId) {
+          this.subscribeUserCallsInternal(this.userCallsUserId);
         }
       },
       onDisconnect: () => this.connected.next(false),
@@ -162,6 +172,7 @@ export class WebSocketService implements OnDestroy {
     this.userPartnerLeftTopics.clear();
     this.userMatchFoundTopics.clear();
     this.userPartnerSearchingTopics.clear();
+    this.userCallTopics.clear();
     this.connect();
   }
 
@@ -302,9 +313,17 @@ export class WebSocketService implements OnDestroy {
     return this.partnerSearching$;
   }
 
-  subscribeCalls(): Observable<CallSignal> {
+  subscribeCalls(userId?: string | null): Observable<CallSignal> {
+    if (userId) {
+      this.userCallsUserId = userId;
+    }
     if (!this.client) this.connect();
-    this.whenConnected(() => this.subscribeCallsInternal()).subscribe();
+    this.whenConnected(() => {
+      this.subscribeCallsInternal();
+      if (this.userCallsUserId) {
+        this.subscribeUserCallsInternal(this.userCallsUserId);
+      }
+    }).subscribe();
     return this.callSignal$;
   }
 
@@ -473,13 +492,25 @@ export class WebSocketService implements OnDestroy {
   private subscribeCallsInternal(): void {
     if (!this.client?.connected || this.callsSubscribed) return;
     this.client.subscribe('/user/queue/calls', (msg: IMessage) => {
-      try {
-        this.callSignals.next(JSON.parse(msg.body));
-      } catch (e) {
-        console.warn('Parse call signal failed', e);
-      }
+      this.emitCallSignal(msg.body);
     });
     this.callsSubscribed = true;
+  }
+
+  private subscribeUserCallsInternal(userId: string): void {
+    if (!this.client?.connected || this.userCallTopics.has(userId)) return;
+    this.client.subscribe(`/topic/user/${userId}/calls`, (msg: IMessage) => {
+      this.emitCallSignal(msg.body);
+    });
+    this.userCallTopics.add(userId);
+  }
+
+  private emitCallSignal(body: string): void {
+    try {
+      this.callSignals.next(JSON.parse(body));
+    } catch (e) {
+      console.warn('Parse call signal failed', e);
+    }
   }
 
   sendTyping(roomId: string, typing: boolean): Observable<void> {
