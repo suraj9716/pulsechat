@@ -88,7 +88,12 @@ export class LoginComponent {
       next: () => this.router.navigate(['/chat']).then(() => (this.loading = false)),
       error: (err) => {
         this.loading = false;
-        this.errorMessage = err.error?.error || 'Login failed';
+        if (err.status === 401) {
+          this.errorMessage =
+            'Invalid username or password for this server. If you registered locally before, create a new account here (Render uses a separate database).';
+        } else {
+          this.errorMessage = err.error?.error || 'Login failed. Try again.';
+        }
       },
       complete: () => (this.loading = false)
     });

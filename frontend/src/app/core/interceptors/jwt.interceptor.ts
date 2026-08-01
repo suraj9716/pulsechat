@@ -16,8 +16,9 @@ export const jwtInterceptor: HttpInterceptorFn = (req, next) => {
       : req;
 
   const isAuthRoute = req.url.includes('/api/auth/');
+  const token = isAuthRoute ? null : auth.getAccessToken();
 
-  return next(withAuth(auth.getAccessToken())).pipe(
+  return next(withAuth(token)).pipe(
     catchError((err: HttpErrorResponse) => {
       if (isAuthRoute || (err.status !== 401 && err.status !== 403)) {
         return throwError(() => err);
