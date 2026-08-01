@@ -10,12 +10,17 @@ import {
 import { UnreadCountService } from './unread-count.service';
 import { APP_NAME } from '../constants/app.constants';
 
+type PulseNotificationOptions = NotificationOptions & {
+  vibrate?: number[];
+};
+
 @Injectable({ providedIn: 'root' })
 export class MessageNotificationService implements OnDestroy {
   private subs: Subscription[] = [];
   private baseTitle = APP_NAME;
   private activeRoomId: string | null = null;
   private permissionRequested = false;
+  private activeCallTag: string | null = null;
 
   constructor(
     private ws: WebSocketService,
@@ -35,8 +40,7 @@ export class MessageNotificationService implements OnDestroy {
 
     this.subs.push(
       this.ws.subscribeFriendMessages().subscribe((msg) => this.onFriendMessage(msg)),
-      this.ws.subscribeFriendRequests().subscribe((req) => this.onFriendRequest(req)),
-      this.ws.subscribeCalls().subscribe((sig) => this.onCallSignal(sig))
+      this.ws.subscribeFriendRequests().subscribe((req) => this.onFriendRequest(req))
     );
 
     this.updateDocumentTitle();
@@ -46,13 +50,43 @@ export class MessageNotificationService implements OnDestroy {
     this.activeRoomId = roomId;
   }
 
+  /** Incoming WebRTC call — mobile lock-screen / background alert. */
+  notifyIncomingCall(sig: CallSignal): void {
+    if (sig.type !== 'offer') return;
+
+    const name = sig.fromUsername ?? 'Someone';
+    const tag = `pulsechat-call-${sig.callId}`;
+    this.activeCallTag = tag;
+
+    void this.vibrate([400, 200, 400, 200, 400, 200, 800]);
+    void this.show(
+      '📞 Incoming call',
+      `${name} is calling you`,
+      '/',
+      {
+        tag,
+        requireInteraction: true,
+        vibrate: [400, 200, 400, 200, 400, 200, 800],
+        data: { url: '/', type: 'call', callId: sig.callId }
+      },
+      document.visibilityState !== 'visible'
+    );
+  }
+
+  dismissCallNotification(callId?: string | null): void {
+    const tag = callId ? `pulsechat-call-${callId}` : this.activeCallTag;
+    if (tag) {
+      void this.closeNotification(tag);
+    }
+    this.activeCallTag = null;
+  }
+
   async requestPermission(): Promise<NotificationPermission> {
     if (!('Notification' in window)) {
       return 'denied';
     }
     this.permissionRequested = true;
-    const result = await Notification.requestPermission();
-    return result;
+    return Notification.requestPermission();
   }
 
   private async requestPermissionIfNeeded(): Promise<void> {
@@ -90,16 +124,7 @@ export class MessageNotificationService implements OnDestroy {
 
   private onFriendRequest(req: IncomingFriendRequest): void {
     if (document.visibilityState === 'visible') return;
-    const title = 'Friend request';
-    const body = `${req.sender.username} wants to be friends`;
-    void this.show(title, body, '/friends');
-  }
-
-  private onCallSignal(sig: CallSignal): void {
-    if (sig.type !== 'offer') return;
-    const title = 'Incoming call';
-    const body = `${sig.fromUsername ?? 'Someone'} is calling`;
-    void this.show(title, body, '/friends');
+    void this.show('Friend request', `${req.sender.username} wants to be friends`, '/friends');
   }
 
   private shouldNotifyMessage(msg: IncomingFriendMessage): boolean {
@@ -120,17 +145,37 @@ export class MessageNotificationService implements OnDestroy {
     document.title = count > 0 ? `(${count}) ${this.baseTitle}` : this.baseTitle;
   }
 
-  private async show(title: string, body: string, url: string): Promise<void> {
+  private async vibrate(pattern: number[]): Promise<void> {
+    if ('vibrate' in navigator) {
+      try {
+        navigator.vibrate(pattern);
+      } catch {
+        /* ignored */
+      }
+    }
+  }
+
+  private async show(
+    title: string,
+    body: string,
+    url: string,
+    extra: Partial<PulseNotificationOptions> = {},
+    force = false
+  ): Promise<void> {
+    if (!force && document.visibilityState === 'visible') {
+      return;
+    }
     if (!('Notification' in window) || Notification.permission !== 'granted') {
       return;
     }
 
-    const options: NotificationOptions = {
+    const options: PulseNotificationOptions = {
       body,
       icon: '/favicon.ico',
       badge: '/favicon.ico',
-      tag: 'pulsechat-notification',
-      data: { url }
+      tag: extra.tag ?? 'pulsechat-notification',
+      data: { url, ...(extra.data as object) },
+      ...extra
     };
 
     try {
@@ -147,6 +192,19 @@ export class MessageNotificationService implements OnDestroy {
       };
     } catch {
       /* ignore notification errors */
+    }
+  }
+
+  private async closeNotification(tag: string): Promise<void> {
+    try {
+      if ('serviceWorker' in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        const list = await reg.getNotifications({ tag });
+        list.forEach((n) => n.close());
+        return;
+      }
+    } catch {
+      /* ignore */
     }
   }
 }

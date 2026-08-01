@@ -4,6 +4,7 @@ import { WebSocketService, CallSignal } from './websocket.service';
 import { ChatApiService } from './chat-api.service';
 import { CallRingtonePlayer, RemoteAudioPlayer, waitIceGathering } from '../utils/call-audio.helper';
 import { callLogContent } from '../utils/call-log.helper';
+import { MessageNotificationService } from './message-notification.service';
 
 export type CallState = 'idle' | 'outgoing' | 'incoming' | 'active';
 
@@ -33,7 +34,8 @@ export class CallService implements OnDestroy {
 
   constructor(
     private ws: WebSocketService,
-    private chatApi: ChatApiService
+    private chatApi: ChatApiService,
+    private messageNotification: MessageNotificationService
   ) {}
 
   ngOnDestroy(): void {
@@ -80,6 +82,7 @@ export class CallService implements OnDestroy {
     if (this.state() !== 'incoming' || !this.pc) return;
     this.error.set(null);
     this.ringtone.stop();
+    this.messageNotification.dismissCallNotification(this.callId());
     try {
       await this.addLocalAudioTracks();
       const answer = await this.pc.createAnswer();
@@ -142,6 +145,7 @@ export class CallService implements OnDestroy {
         this.remoteUsername.set(sig.fromUsername ?? 'Friend');
         this.state.set('incoming');
         void this.ringtone.startIncoming();
+        this.messageNotification.notifyIncomingCall(sig);
         await this.createPeerConnection();
         if (sig.sdp) {
           await this.pc!.setRemoteDescription(new RTCSessionDescription(sig.sdp));
@@ -250,6 +254,8 @@ export class CallService implements OnDestroy {
   }
 
   private cleanup(endReason: CallEndReason = 'remote'): void {
+    this.messageNotification.dismissCallNotification(this.callId());
+
     if (endReason === 'hangup' || endReason === 'reject') {
       void this.logCallToChat(endReason);
     }
