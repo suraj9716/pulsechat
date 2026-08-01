@@ -1,5 +1,11 @@
 # Render Blueprint — https://render.com/docs/blueprint-spec
-# Backend: set Root Directory = backend OR use this file with "New Blueprint"
+# Manual deploy: set Root Directory = backend, link Postgres + Redis env vars
+
+databases:
+  - name: pulsechat-db
+    plan: free
+    databaseName: pulsechat
+    user: pulsechat
 
 services:
   - type: web
@@ -15,6 +21,13 @@ services:
         value: https://pulsechat.onrender.com
       - key: SPRING_PROFILES_ACTIVE
         value: prod
+      - key: DATABASE_URL
+        fromDatabase:
+          name: pulsechat-db
+          property: connectionString
+      - key: REDIS_URL
+        sync: false
+      # Optional overrides if not using DATABASE_URL / REDIS_URL:
       - key: POSTGRES_HOST
         sync: false
       - key: POSTGRES_PORT

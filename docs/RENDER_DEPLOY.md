@@ -25,24 +25,51 @@ Save → **Manual Deploy** → Deploy latest commit.
 3. **Runtime:** Docker
 4. **Instance type:** Free
 
-### Environment variables
+### PostgreSQL (required)
+
+**Error `Connection to localhost:5432 refused`** = database env vars missing on Render.
+
+1. Render Dashboard → **New → PostgreSQL** (free, same region as backend)
+2. Open your **backend Web Service** → **Environment**
+3. Click **Add from Database** → select the Postgres you created  
+   → Render adds **`DATABASE_URL`** automatically (recommended)
+4. **Save** → **Manual Deploy**
+
+Or set manually (from Postgres **Connections** tab):
+
+```env
+POSTGRES_HOST=dpg-xxxxx-a.oregon-postgres.render.com
+POSTGRES_PORT=5432
+POSTGRES_DB=pulsechat
+POSTGRES_USER=pulsechat
+POSTGRES_PASSWORD=<password from dashboard>
+```
+
+### Redis (required for startup)
+
+[Upstash](https://upstash.com) → free Redis → copy **Redis URL** (`rediss://...`):
+
+```env
+REDIS_URL=rediss://default:YOUR_PASSWORD@YOUR_HOST.upstash.io:6379
+```
+
+Or separate vars:
+
+```env
+REDIS_HOST=YOUR_HOST.upstash.io
+REDIS_PORT=6379
+REDIS_PASSWORD=<password>
+```
+
+### Other environment variables
 
 ```env
 JWT_SECRET=<long-random-secret>
 CORS_ORIGINS=https://YOUR-FRONTEND.onrender.com
-POSTGRES_HOST=<from Render Postgres or Neon>
-POSTGRES_PORT=5432
-POSTGRES_DB=<db name>
-POSTGRES_USER=<user>
-POSTGRES_PASSWORD=<password>
-REDIS_HOST=<Upstash or Render Redis host>
-REDIS_PORT=6379
 SPRING_PROFILES_ACTIVE=prod
 ```
 
-**PostgreSQL:** Render → New → PostgreSQL (or use [Neon](https://neon.tech) free).
-
-**Redis (required for startup):** [Upstash](https://upstash.com) free Redis → copy host to `REDIS_HOST`.
+The backend accepts **`DATABASE_URL`** (Render auto-injects when linked) or **`POSTGRES_*`** vars.
 
 ---
 
