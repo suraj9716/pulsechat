@@ -22,6 +22,8 @@ import { MatCardModule } from '@angular/material/card';
 
 import { MatBadgeModule } from '@angular/material/badge';
 
+import { MatSnackBar, MatSnackBarModule } from '@angular/material/snack-bar';
+
 import { AuthService } from '../../core/services/auth.service';
 
 import { WebSocketService, IncomingFriendRequest } from '../../core/services/websocket.service';
@@ -72,7 +74,9 @@ import { Subscription } from 'rxjs';
 
     MatCardModule,
 
-    MatBadgeModule
+    MatBadgeModule,
+
+    MatSnackBarModule
 
   ],
 
@@ -206,15 +210,11 @@ import { Subscription } from 'rxjs';
 
             <div class="call-actions">
 
-              @if (call.speakerSupported()) {
+              <button mat-fab class="speaker-btn" (click)="toggleSpeaker()" [attr.aria-label]="call.speakerOn() ? 'Speaker on' : 'Speaker off'">
 
-                <button mat-mini-fab (click)="toggleSpeaker()" [attr.aria-label]="call.speakerOn() ? 'Earpiece' : 'Speaker'">
+                <mat-icon>{{ call.speakerOn() ? 'volume_up' : 'volume_off' }}</mat-icon>
 
-                  <mat-icon>{{ call.speakerOn() ? 'volume_up' : 'hearing' }}</mat-icon>
-
-                </button>
-
-              }
+              </button>
 
               <button mat-fab color="warn" (click)="hangUp()"><mat-icon>call_end</mat-icon></button>
 
@@ -476,7 +476,9 @@ import { Subscription } from 'rxjs';
 
     .call-icon { font-size: 48px; width: 48px; height: 48px; color: #667eea; margin-bottom: 8px; }
 
-    .call-actions { display: flex; justify-content: center; gap: 24px; margin-top: 16px; }
+    .call-actions { display: flex; justify-content: center; align-items: center; gap: 24px; margin-top: 16px; }
+
+    .speaker-btn { background: #667eea; color: #fff; }
 
     .menu-btn { margin-right: 4px; }
 
@@ -558,7 +560,9 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
 
     public callService: CallService,
 
-    private breakpoint: BreakpointObserver
+    private breakpoint: BreakpointObserver,
+
+    private snackBar: MatSnackBar
 
   ) {
 
@@ -726,7 +730,15 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
 
   toggleSpeaker(): void {
 
-    void this.callService.toggleSpeaker();
+    void this.callService.toggleSpeaker().then((msg) => {
+
+      if (msg) {
+
+        this.snackBar.open(msg, 'OK', { duration: 2500 });
+
+      }
+
+    });
 
   }
 

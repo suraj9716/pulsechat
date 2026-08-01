@@ -41,41 +41,54 @@ export class RemoteAudioPlayer {
     }
   }
 
-  async toggleSpeaker(): Promise<boolean> {
-    if (!('setSinkId' in this.el)) {
-      return false;
-    }
-    try {
-      const outputs = (await navigator.mediaDevices.enumerateDevices())
-        .filter((d) => d.kind === 'audiooutput');
-      if (outputs.length <= 1) {
-        this.speakerDeviceId = null;
-        await (this.el as HTMLMediaElement & { setSinkId: (id: string) => Promise<void> })
-          .setSinkId('');
-        return true;
-      }
-      if (this.speakerDeviceId) {
-        this.speakerDeviceId = null;
-        await (this.el as HTMLMediaElement & { setSinkId: (id: string) => Promise<void> })
-          .setSinkId('');
-      } else {
-        const speaker = outputs.find((d) => /speaker|default/i.test(d.label)) ?? outputs[outputs.length - 1];
-        this.speakerDeviceId = speaker.deviceId;
-        await (this.el as HTMLMediaElement & { setSinkId: (id: string) => Promise<void> })
-          .setSinkId(speaker.deviceId);
-      }
-      return true;
-    } catch {
-      return false;
-    }
+  private sinkId(id: string): Promise<void> {
+    return (this.el as HTMLMediaElement & { setSinkId: (id: string) => Promise<void> }).setSinkId(id);
   }
 
-  isSpeakerSupported(): boolean {
-    return 'setSinkId' in this.el;
+  async toggleSpeaker(): Promise<{ ok: boolean; fallback: boolean }> {
+    if (this.hasSetSinkId()) {
+      try {
+        await navigator.mediaDevices.enumerateDevices();
+        const outputs = (await navigator.mediaDevices.enumerateDevices())
+          .filter((d) => d.kind === 'audiooutput');
+
+        if (this.speakerDeviceId && this.speakerDeviceId !== 'fallback') {
+          this.speakerDeviceId = null;
+          await this.sinkId('');
+          return { ok: true, fallback: false };
+        }
+
+        if (outputs.length > 0) {
+          const speaker =
+            outputs.find((d) => /speaker|loud|default/i.test(d.label)) ??
+            outputs[outputs.length - 1];
+          this.speakerDeviceId = speaker.deviceId;
+          await this.sinkId(speaker.deviceId);
+          return { ok: true, fallback: false };
+        }
+      } catch {
+        /* try fallback below */
+      }
+    }
+
+    // Mobile fallback (iOS / browsers without setSinkId): toggle UI + replay at full volume
+    this.speakerDeviceId = this.speakerDeviceId === 'fallback' ? null : 'fallback';
+    this.el.volume = 1;
+    this.el.muted = false;
+    try {
+      await this.el.play();
+    } catch {
+      /* ignore */
+    }
+    return { ok: true, fallback: true };
   }
 
   isSpeakerOn(): boolean {
     return this.speakerDeviceId != null;
+  }
+
+  private hasSetSinkId(): boolean {
+    return typeof (this.el as HTMLMediaElement & { setSinkId?: unknown }).setSinkId === 'function';
   }
 
   stop(): void {
@@ -90,10 +103,9 @@ export class RemoteAudioPlayer {
   }
 
   private async applySpeaker(): Promise<void> {
-    if (this.speakerDeviceId && 'setSinkId' in this.el) {
+    if (this.speakerDeviceId && this.speakerDeviceId !== 'fallback' && this.hasSetSinkId()) {
       try {
-        await (this.el as HTMLMediaElement & { setSinkId: (id: string) => Promise<void> })
-          .setSinkId(this.speakerDeviceId);
+        await this.sinkId(this.speakerDeviceId);
       } catch {
         this.speakerDeviceId = null;
       }

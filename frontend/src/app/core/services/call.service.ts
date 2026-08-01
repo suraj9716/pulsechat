@@ -20,7 +20,6 @@ export class CallService implements OnDestroy {
   remoteStream = signal<MediaStream | null>(null);
   error = signal<string | null>(null);
   speakerOn = signal(false);
-  speakerSupported = signal(false);
 
   private pc: RTCPeerConnection | null = null;
   private pendingCandidates: RTCIceCandidateInit[] = [];
@@ -39,9 +38,7 @@ export class CallService implements OnDestroy {
     private ws: WebSocketService,
     private chatApi: ChatApiService,
     private messageNotification: MessageNotificationService
-  ) {
-    this.speakerSupported.set(this.remoteAudio.isSpeakerSupported());
-  }
+  ) {}
 
   ngOnDestroy(): void {
     this.cleanup('failed');
@@ -115,11 +112,15 @@ export class CallService implements OnDestroy {
     }
   }
 
-  async toggleSpeaker(): Promise<void> {
-    const ok = await this.remoteAudio.toggleSpeaker();
-    if (ok) {
-      this.speakerOn.set(this.remoteAudio.isSpeakerOn());
+  async toggleSpeaker(): Promise<string | null> {
+    const result = await this.remoteAudio.toggleSpeaker();
+    this.speakerOn.set(this.remoteAudio.isSpeakerOn());
+    if (result.fallback) {
+      return this.speakerOn()
+        ? 'Speaker mode on (use phone volume buttons)'
+        : 'Earpiece mode';
     }
+    return this.speakerOn() ? 'Speaker on' : 'Earpiece';
   }
 
   rejectCall(): void {
