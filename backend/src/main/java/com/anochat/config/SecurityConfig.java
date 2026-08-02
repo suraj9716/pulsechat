@@ -44,6 +44,7 @@ public class SecurityConfig {
             "/uploads/**",
             "/actuator/health",
             "/api/chat/storage-mode",
+            "/api/chat/call/config",
             "/error"
     };
 
