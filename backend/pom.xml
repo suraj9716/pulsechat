@@ -87,6 +87,13 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!-- LiveKit server tokens for stable voice calls -->
+        <dependency>
+            <groupId>io.livekit</groupId>
+            <artifactId>livekit-server</artifactId>
+            <version>0.9.2</version>
+        </dependency>
+
         <!-- MapStruct & Lombok -->
         <dependency>
             <groupId>org.mapstruct</groupId>

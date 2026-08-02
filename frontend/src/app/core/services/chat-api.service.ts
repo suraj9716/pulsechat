@@ -90,8 +90,20 @@ export class ChatApiService {
     sdp?: { type?: string; sdp?: string };
     candidate?: RTCIceCandidateInit;
     sentAt?: number;
+    livekit?: boolean;
   }): Observable<{ ok: boolean }> {
     return this.http.post<{ ok: boolean }>(`${this.base}/call/signal`, payload);
+  }
+
+  getCallConfig(): Observable<{ mode: 'livekit' | 'webrtc'; livekitUrl?: string | null }> {
+    return this.http.get<{ mode: 'livekit' | 'webrtc'; livekitUrl?: string | null }>(`${this.base}/call/config`);
+  }
+
+  getLiveKitToken(callId: string): Observable<{ token: string; url: string; roomName: string }> {
+    return this.http.post<{ token: string; url: string; roomName: string }>(
+      `${this.base}/call/${callId}/livekit-token`,
+      {}
+    );
   }
 
   nextPartner(roomId: string): Observable<NextPartnerResponse> {

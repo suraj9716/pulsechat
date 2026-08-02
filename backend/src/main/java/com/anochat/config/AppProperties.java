@@ -15,6 +15,15 @@ public class AppProperties {
     private Jwt jwt = new Jwt();
     private RateLimit rateLimit = new RateLimit();
     private Cors cors = new Cors();
+    private LiveKit livekit = new LiveKit();
+
+    @Getter
+    @Setter
+    public static class LiveKit {
+        private String url = "";
+        private String apiKey = "";
+        private String apiSecret = "";
+    }
 
     @Getter
     @Setter

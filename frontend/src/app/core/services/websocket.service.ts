@@ -44,6 +44,7 @@ export interface CallSignal {
   toUserId: string;
   callId: string;
   sentAt?: number;
+  livekit?: boolean;
   sdp?: RTCSessionDescriptionInit;
   candidate?: RTCIceCandidateInit;
 }
@@ -570,6 +571,7 @@ export class WebSocketService implements OnDestroy {
       toUserId: String(raw['toUserId'] ?? ''),
       callId: String(raw['callId'] ?? ''),
       sentAt: typeof raw['sentAt'] === 'number' ? raw['sentAt'] : Number(raw['sentAt']),
+      livekit: raw['livekit'] === true,
       sdp: sdp as RTCSessionDescriptionInit | undefined,
       candidate: candidate as RTCIceCandidateInit | undefined
     };

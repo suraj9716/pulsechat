@@ -82,6 +82,11 @@ app:
     allow-credentials: true
     max-age: 3600
 
+  livekit:
+    url: ${LIVEKIT_URL:}
+    api-key: ${LIVEKIT_API_KEY:}
+    api-secret: ${LIVEKIT_API_SECRET:}
+
 logging:
   level:
     root: INFO

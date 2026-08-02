@@ -24,4 +24,7 @@ public class CallSignalRequest {
     private Map<String, Object> candidate;
 
     private Long sentAt;
+
+    /** When true, clients join a LiveKit room instead of exchanging WebRTC SDP. */
+    private Boolean livekit;
 }

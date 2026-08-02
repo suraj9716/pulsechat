@@ -7,6 +7,7 @@ import { callLogContent } from '../utils/call-log.helper';
 import { fixSdpString } from '../utils/call-sdp.helper';
 import { MessageNotificationService } from './message-notification.service';
 import { LocalMessageStoreService } from './local-message-store.service';
+import { LiveKitCallSession } from '../utils/livekit-call.helper';
 
 export type CallState = 'idle' | 'outgoing' | 'incoming' | 'active';
 
@@ -63,6 +64,9 @@ export class CallService implements OnDestroy {
   ];
 
   private audioMonitor: ReturnType<typeof setInterval> | null = null;
+  private liveKit = new LiveKitCallSession();
+  private callMode: 'livekit' | 'webrtc' | null = null;
+  private incomingUsesLiveKit = false;
 
   constructor(
     private ws: WebSocketService,
@@ -103,6 +107,12 @@ export class CallService implements OnDestroy {
     void this.ringtone.startOutgoing();
 
     try {
+      const mode = await this.resolveCallMode();
+      if (mode === 'livekit') {
+        await this.startLiveKitCall(toUserId, id, session);
+        return;
+      }
+
       await this.createPeerConnection();
       this.ensureAudioTransceiver();
 
@@ -177,6 +187,12 @@ export class CallService implements OnDestroy {
     }
 
     try {
+      const mode = this.incomingUsesLiveKit ? 'livekit' : await this.resolveCallMode();
+      if (mode === 'livekit') {
+        await this.acceptLiveKitCall(callId, micStream);
+        return;
+      }
+
       if (this.pc) {
         this.pc.close();
         this.pc = null;
@@ -232,6 +248,12 @@ export class CallService implements OnDestroy {
   }
 
   async toggleSpeaker(): Promise<string | null> {
+    if (this.callMode === 'livekit') {
+      const next = !this.speakerOn();
+      await this.liveKit.setSpeakerOn(next);
+      this.speakerOn.set(next);
+      return next ? 'Speaker on' : 'Earpiece';
+    }
     const result = await this.remoteAudio.toggleSpeaker();
     this.speakerOn.set(this.remoteAudio.isSpeakerOn());
     if (result.fallback) {
@@ -317,7 +339,8 @@ export class CallService implements OnDestroy {
         this.state.set('incoming');
         void this.ringtone.startIncoming();
         this.messageNotification.notifyIncomingCall(sig);
-        this.pendingRemoteDescription = this.normalizeRemoteSdp(sig.sdp);
+        this.incomingUsesLiveKit = sig.livekit === true || !sig.sdp;
+        this.pendingRemoteDescription = this.incomingUsesLiveKit ? null : this.normalizeRemoteSdp(sig.sdp);
         break;
       case 'answer':
         if (
@@ -412,6 +435,7 @@ export class CallService implements OnDestroy {
       callId: string;
       sdp?: RTCSessionDescriptionInit;
       candidate?: RTCIceCandidateInit;
+      livekit?: boolean;
     },
     optional = false
   ): Promise<boolean> {
@@ -423,7 +447,8 @@ export class CallService implements OnDestroy {
           callId: payload.callId,
           sdp: payload.sdp,
           candidate: payload.candidate,
-          sentAt: Date.now()
+          sentAt: Date.now(),
+          livekit: payload.livekit
         })
       );
       return true;
@@ -687,6 +712,71 @@ export class CallService implements OnDestroy {
     }
   }
 
+  private async resolveCallMode(): Promise<'livekit' | 'webrtc'> {
+    if (this.callMode) return this.callMode;
+    try {
+      const cfg = await firstValueFrom(this.chatApi.getCallConfig());
+      this.callMode = cfg.mode === 'livekit' && cfg.livekitUrl ? 'livekit' : 'webrtc';
+    } catch {
+      this.callMode = 'webrtc';
+    }
+    return this.callMode;
+  }
+
+  private async startLiveKitCall(toUserId: string, id: string, session: number): Promise<void> {
+    try {
+      const { token, url } = await firstValueFrom(this.chatApi.getLiveKitToken(id));
+      await this.liveKit.connect(url, token, {
+        onRemoteParticipant: () => {
+          if (this.callSession === session && this.state() === 'outgoing') {
+            this.ringtone.stop();
+            this.markCallActive();
+          }
+        },
+        onDisconnected: () => {
+          if (this.state() === 'active' || this.state() === 'outgoing') {
+            this.error.set('Call disconnected.');
+            this.cleanup('failed');
+          }
+        }
+      });
+
+      if (!this.canSendForSession(session, id)) return;
+
+      const sent = await this.sendSignal({
+        type: 'offer',
+        toUserId,
+        callId: id,
+        livekit: true
+      });
+      if (!sent || !this.canSendForSession(session, id)) {
+        this.error.set('Could not reach friend. Is friend logged in?');
+        this.cleanup('failed');
+        return;
+      }
+      this.offerDelivered = true;
+    } catch {
+      if (this.callSession === session) {
+        this.error.set('Could not start call. Configure LiveKit on the server.');
+        this.cleanup('failed');
+      }
+    }
+  }
+
+  private async acceptLiveKitCall(callId: string, micStream: MediaStream): Promise<void> {
+    micStream.getTracks().forEach((t) => t.stop());
+    const { token, url } = await firstValueFrom(this.chatApi.getLiveKitToken(callId));
+    await this.liveKit.connect(url, token, {
+      onDisconnected: () => {
+        if (this.state() === 'active') {
+          this.error.set('Call disconnected.');
+          this.cleanup('failed');
+        }
+      }
+    });
+    this.markCallActive();
+  }
+
   private rememberCancelledCall(callId: string): void {
     this.cancelledCallIds.add(callId);
     setTimeout(() => this.cancelledCallIds.delete(callId), 120_000);
@@ -716,11 +806,13 @@ export class CallService implements OnDestroy {
     this.iceRestartUsed = false;
 
     this.localStream()?.getTracks().forEach((t) => t.stop());
+    void this.liveKit.disconnect();
     this.pc?.close();
     this.pc = null;
     this.pendingRemoteDescription = null;
     this.pendingCandidates = [];
     this.callActiveAt = null;
+    this.incomingUsesLiveKit = false;
 
     this.localStream.set(null);
     this.remoteStream.set(null);

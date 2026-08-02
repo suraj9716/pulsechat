@@ -3,7 +3,9 @@ package com.anochat.controller;
 import com.anochat.api.dto.request.CallLogRequest;
 import com.anochat.api.dto.request.CallSignalRequest;
 import com.anochat.api.dto.request.MessageRequest;
+import com.anochat.api.dto.response.CallConfigResponse;
 import com.anochat.api.dto.response.ChatRoomResponse;
+import com.anochat.api.dto.response.LiveKitTokenResponse;
 import com.anochat.api.dto.response.MessageResponse;
 import com.anochat.api.dto.response.UnreadSummaryResponse;
 import com.anochat.api.dto.response.NextPartnerResponse;
@@ -13,6 +15,7 @@ import com.anochat.service.CallRelayService;
 import com.anochat.service.FileStorageService;
 import com.anochat.service.ChatRoomService;
 import com.anochat.service.MatchmakingService;
+import com.anochat.service.LiveKitService;
 import com.anochat.service.MessageService;
 import com.anochat.websocket.ChatWebSocketHandler;
 import jakarta.validation.Valid;
@@ -39,6 +42,7 @@ public class ChatController {
     private final SimpMessagingTemplate messagingTemplate;
     private final FileStorageService fileStorageService;
     private final CallRelayService callRelayService;
+    private final LiveKitService liveKitService;
 
     /** Public — lets clients confirm deployed backend uses device-only message storage. */
     @GetMapping("/storage-mode")
@@ -115,6 +119,20 @@ public class ChatController {
     /**
      * Next partner: leave current room and re-enter matchmaking (client should call matchmaking/search again with preference).
      */
+    @GetMapping("/call/config")
+    public ResponseEntity<CallConfigResponse> getCallConfig() {
+        return ResponseEntity.ok(CallConfigResponse.builder()
+                .mode(liveKitService.isEnabled() ? "livekit" : "webrtc")
+                .livekitUrl(liveKitService.getPublicUrl())
+                .build());
+    }
+
+    @PostMapping("/call/{callId}/livekit-token")
+    public ResponseEntity<LiveKitTokenResponse> getLiveKitToken(@AuthenticationPrincipal UserPrincipal principal,
+                                                                 @PathVariable String callId) {
+        return ResponseEntity.ok(liveKitService.createJoinToken(principal, callId));
+    }
+
     @PostMapping("/call/signal")
     public ResponseEntity<Map<String, Object>> relayCallSignal(@AuthenticationPrincipal UserPrincipal principal,
                                                                @Valid @RequestBody CallSignalRequest request) {
@@ -126,6 +144,9 @@ public class ChatController {
         }
         if (request.getCandidate() != null) {
             payload.put("candidate", request.getCandidate());
+        }
+        if (Boolean.TRUE.equals(request.getLivekit())) {
+            payload.put("livekit", true);
         }
         payload.put("sentAt", request.getSentAt() != null ? request.getSentAt() : System.currentTimeMillis());
 
