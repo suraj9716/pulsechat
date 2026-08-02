@@ -2,6 +2,7 @@ import { Injectable, signal, computed } from '@angular/core';
 import { ChatApiService } from './chat-api.service';
 import { FriendApiService, FriendListItem } from './friend-api.service';
 import { WebSocketService, IncomingFriendMessage } from './websocket.service';
+import { LocalMessageStoreService } from './local-message-store.service';
 import { Subscription } from 'rxjs';
 
 @Injectable({ providedIn: 'root' })
@@ -22,7 +23,8 @@ export class UnreadCountService {
   constructor(
     private chatApi: ChatApiService,
     private friendApi: FriendApiService,
-    private ws: WebSocketService
+    private ws: WebSocketService,
+    private localStore: LocalMessageStoreService
   ) {}
 
   startListening(): void {
@@ -70,14 +72,31 @@ export class UnreadCountService {
   }
 
   applyOverview(items: FriendListItem[]): void {
-    this.overviewItems.set(items);
-    const map: Record<string, number> = {};
-    for (const item of items) {
-      if (item.unreadCount > 0) {
-        map[item.friend.id] = item.unreadCount;
+    void this.mergeLocalMeta(items).then((merged) => {
+      this.overviewItems.set(merged);
+      const map: Record<string, number> = {};
+      for (const item of merged) {
+        if (item.unreadCount > 0) {
+          map[item.friend.id] = item.unreadCount;
+        }
       }
-    }
-    this.friendUnreadMap.set(map);
+      this.friendUnreadMap.set(map);
+    });
+  }
+
+  private async mergeLocalMeta(items: FriendListItem[]): Promise<FriendListItem[]> {
+    const local = await this.localStore.getAllConversations();
+    const byFriend = new Map(local.map((c) => [c.friendId, c]));
+    return items.map((item) => {
+      const meta = byFriend.get(item.friend.id);
+      if (!meta) return item;
+      return {
+        ...item,
+        unreadCount: Math.max(item.unreadCount, meta.unreadCount),
+        lastMessagePreview: meta.lastMessagePreview ?? item.lastMessagePreview,
+        lastMessageAt: meta.lastMessageAt ?? item.lastMessageAt
+      };
+    });
   }
 
   unreadFor(friendId: string): number {
@@ -85,14 +104,12 @@ export class UnreadCountService {
   }
 
   markFriendRead(friendId: string, roomId: string): void {
-    this.chatApi.markRoomRead(roomId).subscribe({
-      next: () => {
-        this.friendUnreadMap.update((m) => {
-          const next = { ...m };
-          delete next[friendId];
-          return next;
-        });
-      }
+    void this.localStore.markRoomRead(roomId, friendId).then(() => {
+      this.friendUnreadMap.update((m) => {
+        const next = { ...m };
+        delete next[friendId];
+        return next;
+      });
     });
   }
 
@@ -110,5 +127,18 @@ export class UnreadCountService {
       ...m,
       [msg.senderId]: (m[msg.senderId] ?? 0) + 1
     }));
+    void this.localStore.saveMessage(
+      {
+        id: msg.messageId,
+        senderId: msg.senderId,
+        receiverId: msg.senderId,
+        chatRoomId: msg.roomId,
+        content: msg.preview,
+        messageType: 'TEXT',
+        status: 'SENT',
+        timestamp: msg.timestamp
+      },
+      { friendId: msg.senderId, incrementUnread: true }
+    );
   }
 }

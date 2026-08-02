@@ -42,6 +42,8 @@ import { FriendNotificationService } from '../../../core/services/friend-notific
 
 import { MessageNotificationService } from '../../../core/services/message-notification.service';
 
+import { ChatMessagingService } from '../../../core/services/chat-messaging.service';
+
 import { SearchPartnerDialogComponent, SearchPartnerDialogData } from '../search-partner-dialog/search-partner-dialog.component';
 
 import { APP_NAME } from '../../../core/constants/app.constants';
@@ -1182,7 +1184,9 @@ export class ChatComponent implements OnInit, OnDestroy {
 
     private router: Router,
 
-    private snackBar: MatSnackBar
+    private snackBar: MatSnackBar,
+
+    private chatMessaging: ChatMessagingService
 
   ) {}
 
@@ -1514,7 +1518,11 @@ export class ChatComponent implements OnInit, OnDestroy {
 
   loadHistory(roomId: string): void {
 
-    this.chatApi.getMessages(roomId).subscribe((msgs) => this.messages.set(msgs.reverse()));
+    const room = this.currentRoom();
+
+    const friendId = room?.friendChat ? room.participant.id : undefined;
+
+    void this.chatMessaging.loadRoomMessages(roomId, friendId).then((msgs) => this.messages.set(msgs));
 
   }
 
@@ -1530,7 +1538,29 @@ export class ChatComponent implements OnInit, OnDestroy {
 
     this.sub = this.ws.subscribeToRoom(roomId).subscribe({
 
-      next: (msg: ChatMessage) => this.appendMessage(msg as MessageResponse),
+      next: (msg: ChatMessage) => {
+
+        const room = this.currentRoom();
+
+        void this.chatMessaging
+
+          .persistIncoming(
+
+            msg as MessageResponse,
+
+            room?.friendChat ? room.participant.id : null,
+
+            this.myId()!,
+
+            this.unread.activeChatFriendId(),
+
+            roomId
+
+          )
+
+          .then(() => this.appendMessage(msg as MessageResponse));
+
+      },
 
       error: (err) => console.warn('Could not subscribe to room messages', err)
 
@@ -1810,25 +1840,19 @@ export class ChatComponent implements OnInit, OnDestroy {
 
     const content = this.newMessage?.trim();
 
-    if (!room || !content) return;
+    if (!room || !content || !this.myId()) return;
 
-    const text = content;
+    this.chatMessaging.sendText(room, this.myId()!, content, room.friendChat ? room.participant.id : undefined).subscribe({
 
-    this.ws.sendMessage(room.id, text).subscribe({
+      next: () => {
 
-      next: () => { this.newMessage = ''; },
+        this.newMessage = '';
 
-      error: () => {
+        void this.chatMessaging.loadRoomMessages(room.id).then((msgs) => this.messages.set(msgs));
 
-        this.chatApi.sendMessage(room.id, text).subscribe({
+      },
 
-          next: (msg) => { this.newMessage = ''; this.appendMessage(msg); },
-
-          error: (apiErr) => console.warn('Could not send message', apiErr)
-
-        });
-
-      }
+      error: (apiErr) => console.warn('Could not send message', apiErr)
 
     });
 
@@ -1842,15 +1866,15 @@ export class ChatComponent implements OnInit, OnDestroy {
 
     const file = (event.target as HTMLInputElement).files?.[0];
 
-    if (!room || !file) return;
+    if (!room || !file || !this.myId()) return;
 
     this.chatApi.uploadImage(file).subscribe({
 
       next: ({ url }) => {
 
-        this.chatApi.sendMessage(room.id, '', { messageType: 'IMAGE', imageUrl: url }).subscribe({
+        this.chatMessaging.sendImage(room, this.myId()!, url, room.friendChat ? room.participant.id : undefined).subscribe({
 
-          next: (msg) => this.appendMessage(msg),
+          next: () => void this.chatMessaging.loadRoomMessages(room.id).then((msgs) => this.messages.set(msgs)),
 
           error: (err) => console.warn('Could not send image', err)
 

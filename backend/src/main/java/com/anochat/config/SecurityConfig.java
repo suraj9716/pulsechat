@@ -43,6 +43,7 @@ public class SecurityConfig {
             "/ws/**",
             "/uploads/**",
             "/actuator/health",
+            "/api/chat/storage-mode",
             "/error"
     };
 

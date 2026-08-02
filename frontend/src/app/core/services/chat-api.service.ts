@@ -43,11 +43,13 @@ export class ChatApiService {
     });
   }
 
-  sendMessage(roomId: string, content: string, opts?: { messageType?: 'TEXT' | 'IMAGE' | 'CALL'; imageUrl?: string }): Observable<MessageResponse> {
+  sendMessage(roomId: string, content: string, opts?: { messageType?: 'TEXT' | 'IMAGE' | 'CALL'; imageUrl?: string; clientMessageId?: string; timestamp?: string }): Observable<MessageResponse> {
     return this.http.post<MessageResponse>(`${this.base}/room/${roomId}/messages`, {
       content: content || null,
       messageType: opts?.messageType ?? 'TEXT',
-      imageUrl: opts?.imageUrl ?? null
+      imageUrl: opts?.imageUrl ?? null,
+      clientMessageId: opts?.clientMessageId,
+      timestamp: opts?.timestamp
     });
   }
 
@@ -73,8 +75,12 @@ export class ChatApiService {
     return this.http.post<void>(`${this.base}/room/${roomId}/read`, {});
   }
 
-  logCall(friendId: string, content: string): Observable<MessageResponse> {
-    return this.http.post<MessageResponse>(`${this.base}/friends/${friendId}/call-log`, { content });
+  logCall(friendId: string, content: string, opts?: { clientMessageId?: string; timestamp?: string }): Observable<MessageResponse> {
+    return this.http.post<MessageResponse>(`${this.base}/friends/${friendId}/call-log`, {
+      content,
+      clientMessageId: opts?.clientMessageId,
+      timestamp: opts?.timestamp
+    });
   }
 
   relayCallSignal(payload: {

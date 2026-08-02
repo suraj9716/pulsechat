@@ -50,12 +50,33 @@ public class ChatWebSocketHandler {
             } catch (IllegalArgumentException ignored) {}
         }
         if ((content == null || content.isBlank()) && (imageUrl == null || imageUrl.isBlank())) return;
+        UUID clientMessageId = parseUuid(payload.get("id"));
+        java.time.Instant clientTimestamp = parseInstant(payload.get("timestamp"));
         try {
             MessageResponse msg = messageService.sendMessage(
-                    roomId, principal.getId(), content, messageType, imageUrl);
+                    roomId, principal.getId(), content, messageType, imageUrl,
+                    clientMessageId, clientTimestamp);
             messagingTemplate.convertAndSend(TOPIC_ROOM_PREFIX + roomId, msg);
         } catch (Exception e) {
             log.warn("Send message failed: {}", e.getMessage());
+        }
+    }
+
+    private UUID parseUuid(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return UUID.fromString(raw);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
+    }
+
+    private java.time.Instant parseInstant(String raw) {
+        if (raw == null || raw.isBlank()) return null;
+        try {
+            return java.time.Instant.parse(raw);
+        } catch (Exception e) {
+            return null;
         }
     }
 

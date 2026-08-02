@@ -42,6 +42,10 @@ import { mediaUrl } from '../../../core/utils/media-url';
 
 import { CallService } from '../../../core/services/call.service';
 
+import { ChatMessagingService } from '../../../core/services/chat-messaging.service';
+
+import { LocalMessageStoreService } from '../../../core/services/local-message-store.service';
+
 
 
 @Component({
@@ -696,7 +700,11 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
     private snackBar: MatSnackBar,
 
-    private callService: CallService
+    private callService: CallService,
+
+    private chatMessaging: ChatMessagingService,
+
+    private localStore: LocalMessageStoreService
 
   ) {}
 
@@ -792,7 +800,7 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
   private loadHistory(roomId: string): void {
 
-    this.chatApi.getMessages(roomId).subscribe((msgs) => this.messages.set(msgs.reverse()));
+    void this.chatMessaging.loadRoomMessages(roomId, this.friendId).then((msgs) => this.messages.set(msgs));
 
   }
 
@@ -808,11 +816,15 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
       next: (msg: ChatMessage) => {
 
-        this.appendMessage(msg as MessageResponse);
+        void this.chatMessaging.persistIncoming(msg as MessageResponse, this.friendId, this.myId()!, this.friendId, roomId).then(() => {
+
+          this.appendMessage(msg as MessageResponse);
+
+        });
 
         if (msg.senderId !== this.myId()) {
 
-          this.chatApi.markRoomRead(roomId).subscribe();
+          this.unread.markFriendRead(this.friendId, roomId);
 
         }
 
@@ -838,31 +850,19 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
     const content = this.newMessage?.trim();
 
-    if (!room || !content) return;
+    if (!room || !content || !this.myId()) return;
 
-    const text = content;
+    this.chatMessaging.sendText(room, this.myId()!, content, room.participant.id).subscribe({
 
-    this.ws.sendMessage(room.id, text).subscribe({
+      next: () => {
 
-      next: () => { this.newMessage = ''; },
+        this.newMessage = '';
 
-      error: () => {
+        void this.chatMessaging.loadRoomMessages(room.id, this.friendId).then((msgs) => this.messages.set(msgs));
 
-        this.chatApi.sendMessage(room.id, text).subscribe({
+      },
 
-          next: (msg) => {
-
-            this.newMessage = '';
-
-            this.appendMessage(msg);
-
-          },
-
-          error: (err) => console.warn('Could not send message', err)
-
-        });
-
-      }
+      error: (err) => console.warn('Could not send message', err)
 
     });
 
@@ -876,15 +876,15 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
     const file = (event.target as HTMLInputElement).files?.[0];
 
-    if (!room || !file) return;
+    if (!room || !file || !this.myId()) return;
 
     this.chatApi.uploadImage(file).subscribe({
 
       next: ({ url }) => {
 
-        this.chatApi.sendMessage(room.id, '', { messageType: 'IMAGE', imageUrl: url }).subscribe({
+        this.chatMessaging.sendImage(room, this.myId()!, url, room.participant.id).subscribe({
 
-          next: (msg) => this.appendMessage(msg),
+          next: () => void this.chatMessaging.loadRoomMessages(room.id, this.friendId).then((msgs) => this.messages.set(msgs)),
 
           error: (err) => console.warn('Could not send image', err)
 
@@ -909,6 +909,8 @@ export class FriendChatComponent implements OnInit, OnDestroy {
     if (!room || !confirm(`Remove ${room.participant.username} from friends? Chat history will be deleted.`)) return;
 
     this.friendApi.removeFriend(this.friendId).subscribe(() => {
+
+      if (room.id) void this.localStore.deleteRoom(room.id, this.friendId);
 
       this.unread.refreshFromOverview();
 

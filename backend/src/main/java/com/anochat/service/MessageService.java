@@ -1,9 +1,7 @@
 package com.anochat.service;
 
 import com.anochat.api.dto.response.MessageResponse;
-import com.anochat.api.mapper.MessageMapper;
 import com.anochat.domain.entity.ChatRoom;
-import com.anochat.domain.entity.Message;
 import com.anochat.domain.entity.MessageStatus;
 import com.anochat.domain.entity.MessageType;
 import com.anochat.domain.entity.RoomType;
@@ -11,35 +9,38 @@ import com.anochat.domain.entity.User;
 import com.anochat.exception.BadRequestException;
 import com.anochat.exception.ResourceNotFoundException;
 import com.anochat.repository.ChatRoomRepository;
-import com.anochat.repository.MessageRepository;
 import com.anochat.repository.UserRepository;
 import com.anochat.websocket.RealtimeNotificationService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.PageRequest;
-import org.springframework.data.domain.Pageable;
-import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class MessageService {
 
-    private final MessageRepository messageRepository;
     private final ChatRoomRepository chatRoomRepository;
     private final UserRepository userRepository;
-    private final MessageMapper messageMapper;
     private final BlockService blockService;
     private final RealtimeNotificationService notificationService;
 
-    @Transactional
+    @Transactional(readOnly = true)
     public MessageResponse sendMessage(UUID chatRoomId, UUID senderId, String content,
                                        MessageType messageType, String imageUrl) {
+        return sendMessage(chatRoomId, senderId, content, messageType, imageUrl, null, null);
+    }
+
+    /**
+     * Validates and relays a message in real time. History is stored on each user's device only.
+     */
+    @Transactional(readOnly = true)
+    public MessageResponse sendMessage(UUID chatRoomId, UUID senderId, String content,
+                                       MessageType messageType, String imageUrl,
+                                       UUID clientMessageId, java.time.Instant clientTimestamp) {
         ChatRoom room = chatRoomRepository.findById(chatRoomId).orElseThrow(() -> new ResourceNotFoundException("ChatRoom", chatRoomId));
         if (chatRoomRepository.findOtherParticipantId(chatRoomId, senderId).isEmpty()) {
             throw new BadRequestException("Not a participant");
@@ -66,19 +67,21 @@ public class MessageService {
             throw new BadRequestException("Image URL is required");
         }
 
-        Message message = Message.builder()
-                .chatRoom(room)
-                .sender(userRepository.getReferenceById(senderId))
-                .receiver(receiver)
+        User sender = userRepository.findById(senderId)
+                .orElseThrow(() -> new ResourceNotFoundException("User", senderId));
+
+        MessageResponse response = MessageResponse.builder()
+                .id(clientMessageId != null ? clientMessageId : UUID.randomUUID())
+                .senderId(senderId)
+                .receiverId(receiver.getId())
+                .chatRoomId(chatRoomId)
                 .content(hasText ? content.trim() : null)
                 .messageType(type)
                 .imageUrl(hasImage ? imageUrl : null)
                 .status(MessageStatus.SENT)
+                .timestamp(clientTimestamp != null ? clientTimestamp : java.time.Instant.now())
                 .build();
-        message = messageRepository.save(message);
-        MessageResponse response = messageMapper.toResponse(message);
-        User sender = userRepository.findById(senderId)
-                .orElseThrow(() -> new ResourceNotFoundException("User", senderId));
+
         notifyIncomingMessage(receiver, sender, response, room.getRoomType());
         return response;
     }
@@ -108,35 +111,28 @@ public class MessageService {
         if (!room.getUser1().getId().equals(userId) && !room.getUser2().getId().equals(userId)) {
             throw new BadRequestException("Not a participant");
         }
-        Pageable pageable = PageRequest.of(page, size, Sort.by(Sort.Direction.DESC, "createdAt"));
-        return messageRepository.findByChatRoomIdOrderByCreatedAtDesc(chatRoomId, pageable)
-                .stream().map(messageMapper::toResponse).collect(Collectors.toList());
+        // Chat history lives on user devices — not in the database.
+        return List.of();
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public void markRoomAsRead(UUID roomId, UUID userId) {
-        ChatRoom room = chatRoomRepository.findById(roomId).orElseThrow(() -> new ResourceNotFoundException("ChatRoom", roomId));
-        if (!room.getUser1().getId().equals(userId) && !room.getUser2().getId().equals(userId)) {
-            throw new BadRequestException("Not a participant");
-        }
-        messageRepository.markAllAsSeenInRoom(roomId, userId);
+        chatRoomRepository.findById(roomId).orElseThrow(() -> new ResourceNotFoundException("ChatRoom", roomId));
+        // Read state tracked locally on the client.
     }
 
     @Transactional(readOnly = true)
     public long getTotalUnreadFriendMessages(UUID userId) {
-        return messageRepository.countUnreadFriendMessages(userId);
+        return 0;
     }
 
     @Transactional(readOnly = true)
     public long getUnreadCountForRoom(UUID roomId, UUID userId) {
-        return messageRepository.countByChatRoomIdAndReceiverIdAndStatusNot(roomId, userId, MessageStatus.SEEN);
+        return 0;
     }
 
-    @Transactional
+    @Transactional(readOnly = true)
     public void markAsSeen(UUID messageId, UUID userId) {
-        Message message = messageRepository.findById(messageId).orElseThrow(() -> new ResourceNotFoundException("Message", messageId));
-        if (!message.getReceiver().getId().equals(userId)) return;
-        message.setStatus(MessageStatus.SEEN);
-        messageRepository.save(message);
+        // Read receipts tracked locally on the client.
     }
 }

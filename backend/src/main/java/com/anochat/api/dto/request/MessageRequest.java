@@ -7,6 +7,9 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.Instant;
+import java.util.UUID;
+
 @Data
 @Builder
 @NoArgsConstructor
@@ -21,4 +24,9 @@ public class MessageRequest {
 
     @Size(max = 512)
     private String imageUrl;
+
+    /** Client-generated message id (stored locally on devices). */
+    private UUID clientMessageId;
+
+    private java.time.Instant timestamp;
 }

@@ -10,9 +10,6 @@ import com.anochat.domain.entity.ChatRoom;
 import com.anochat.domain.entity.FriendRequest;
 import com.anochat.domain.entity.FriendRequestStatus;
 import com.anochat.domain.entity.Friendship;
-import com.anochat.domain.entity.Message;
-import com.anochat.domain.entity.MessageStatus;
-import com.anochat.domain.entity.MessageType;
 import com.anochat.domain.entity.RoomType;
 import com.anochat.domain.entity.User;
 import com.anochat.exception.BadRequestException;
@@ -20,7 +17,6 @@ import com.anochat.exception.ResourceNotFoundException;
 import com.anochat.repository.ChatRoomRepository;
 import com.anochat.repository.FriendRequestRepository;
 import com.anochat.repository.FriendshipRepository;
-import com.anochat.repository.MessageRepository;
 import com.anochat.repository.UserRepository;
 import com.anochat.websocket.RealtimeNotificationService;
 import lombok.RequiredArgsConstructor;
@@ -41,7 +37,6 @@ public class FriendService {
     private final FriendshipRepository friendshipRepository;
     private final UserRepository userRepository;
     private final ChatRoomRepository chatRoomRepository;
-    private final MessageRepository messageRepository;
     private final UserMapper userMapper;
     private final BlockService blockService;
     private final RealtimeNotificationService notificationService;
@@ -176,36 +171,13 @@ public class FriendService {
     private FriendListItemResponse buildFriendListItem(UUID userId, User friend) {
         ChatRoom room = chatRoomService.resolveFriendRoomIfExists(userId, friend.getId());
         UUID roomId = room != null ? room.getId() : null;
-        int unread = roomId != null
-                ? (int) messageRepository.countByChatRoomIdAndReceiverIdAndStatusNot(roomId, userId, MessageStatus.SEEN)
-                : 0;
-        String preview = null;
-        Instant lastAt = null;
-        if (roomId != null) {
-            Message last = messageRepository.findFirstByChatRoomIdOrderByCreatedAtDesc(roomId).orElse(null);
-            if (last != null) {
-                lastAt = last.getCreatedAt();
-                preview = switch (last.getMessageType()) {
-                    case IMAGE -> "📷 Photo";
-                    case CALL -> last.getContent() != null ? "📞 " + last.getContent() : "📞 Voice call";
-                    default -> (last.getContent() != null && !last.getContent().isBlank()
-                            ? truncate(last.getContent(), 60)
-                            : "Message");
-                };
-            }
-        }
         return FriendListItemResponse.builder()
                 .friend(userMapper.toPublicResponse(friend))
                 .roomId(roomId)
-                .unreadCount(unread)
-                .lastMessagePreview(preview)
-                .lastMessageAt(lastAt)
+                .unreadCount(0)
+                .lastMessagePreview(null)
+                .lastMessageAt(null)
                 .build();
-    }
-
-    private static String truncate(String text, int max) {
-        if (text.length() <= max) return text;
-        return text.substring(0, max - 1) + "…";
     }
 
     @Transactional(readOnly = true)

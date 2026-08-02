@@ -6,6 +6,7 @@ import { CallRingtonePlayer, RemoteAudioPlayer } from '../utils/call-audio.helpe
 import { callLogContent } from '../utils/call-log.helper';
 import { fixSdpString } from '../utils/call-sdp.helper';
 import { MessageNotificationService } from './message-notification.service';
+import { LocalMessageStoreService } from './local-message-store.service';
 
 export type CallState = 'idle' | 'outgoing' | 'incoming' | 'active';
 
@@ -55,7 +56,8 @@ export class CallService implements OnDestroy {
   constructor(
     private ws: WebSocketService,
     private chatApi: ChatApiService,
-    private messageNotification: MessageNotificationService
+    private messageNotification: MessageNotificationService,
+    private localStore: LocalMessageStoreService
   ) {}
 
   ngOnDestroy(): void {
@@ -554,9 +556,14 @@ export class CallService implements OnDestroy {
       ? Math.max(0, Math.floor((Date.now() - this.callActiveAt!) / 1000))
       : 0;
     const content = callLogContent(wasActive, durationSeconds, endReason);
+    const clientMessageId = crypto.randomUUID();
+    const timestamp = new Date().toISOString();
 
     try {
-      await firstValueFrom(this.chatApi.logCall(friendId, content));
+      const msg = await firstValueFrom(
+        this.chatApi.logCall(friendId, content, { clientMessageId, timestamp })
+      );
+      await this.localStore.saveMessage(msg, { friendId });
     } catch {
       /* chat log is best-effort */
     }

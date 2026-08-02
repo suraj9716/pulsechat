@@ -5,6 +5,7 @@
     "ng": "ng",
     "start": "ng serve",
     "build": "ng build && node scripts/verify-build.mjs && node scripts/copy-spa-fallback.mjs",
+    "build:android": "ng build --configuration production --base-href ./ && node scripts/verify-build.mjs && node scripts/copy-spa-fallback.mjs",
     "watch": "ng build --watch --configuration development",
     "test": "ng test"
   },
@@ -20,6 +21,8 @@
     "@angular/platform-browser": "^17.3.0",
     "@angular/platform-browser-dynamic": "^17.3.0",
     "@angular/router": "^17.3.0",
+    "@capacitor/core": "^6.2.0",
+    "@capacitor/filesystem": "^6.0.0",
     "@stomp/stompjs": "^7.3.0",
     "rxjs": "~7.8.0",
     "sockjs-client": "^1.6.1",

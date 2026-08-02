@@ -16,4 +16,8 @@ public class CallLogRequest {
     @NotBlank
     @Size(max = 500)
     private String content;
+
+    private java.util.UUID clientMessageId;
+
+    private java.time.Instant timestamp;
 }

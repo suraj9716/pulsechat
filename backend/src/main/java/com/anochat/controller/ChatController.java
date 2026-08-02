@@ -40,6 +40,15 @@ public class ChatController {
     private final FileStorageService fileStorageService;
     private final CallRelayService callRelayService;
 
+    /** Public — lets clients confirm deployed backend uses device-only message storage. */
+    @GetMapping("/storage-mode")
+    public ResponseEntity<Map<String, String>> getStorageMode() {
+        return ResponseEntity.ok(Map.of(
+                "messageStorage", "device-only",
+                "description", "Messages are relayed in real time; history is not persisted on the server."
+        ));
+    }
+
     @GetMapping("/room/current")
     public ResponseEntity<ChatRoomResponse> getCurrentRoom(@AuthenticationPrincipal UserPrincipal principal) {
         try {
@@ -90,7 +99,9 @@ public class ChatController {
                 principal.getId(),
                 request.getContent(),
                 request.getMessageType(),
-                request.getImageUrl());
+                request.getImageUrl(),
+                request.getClientMessageId(),
+                request.getTimestamp());
         messagingTemplate.convertAndSend(ChatWebSocketHandler.TOPIC_ROOM_PREFIX + roomId, msg);
         return ResponseEntity.ok(msg);
     }
@@ -135,7 +146,9 @@ public class ChatController {
                 principal.getId(),
                 request.getContent(),
                 MessageType.CALL,
-                null);
+                null,
+                request.getClientMessageId(),
+                request.getTimestamp());
         messagingTemplate.convertAndSend(ChatWebSocketHandler.TOPIC_ROOM_PREFIX + room.getId(), msg);
         return ResponseEntity.ok(msg);
     }

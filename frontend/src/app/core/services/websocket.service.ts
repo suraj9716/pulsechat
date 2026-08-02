@@ -225,9 +225,19 @@ export class WebSocketService implements OnDestroy {
     });
   }
 
-  sendMessage(roomId: string, content: string, imageUrl?: string, messageType: 'TEXT' | 'IMAGE' = 'TEXT'): Observable<void> {
+  sendMessage(
+    roomId: string,
+    content: string,
+    imageUrl?: string,
+    messageType: 'TEXT' | 'IMAGE' = 'TEXT',
+    meta?: { id: string; timestamp: string }
+  ): Observable<void> {
     if (!this.client) this.connect();
-    const body: Record<string, string> = { messageType };
+    const body: Record<string, string> = {
+      messageType,
+      id: meta?.id ?? crypto.randomUUID(),
+      timestamp: meta?.timestamp ?? new Date().toISOString()
+    };
     if (content) body['content'] = content;
     if (imageUrl) body['imageUrl'] = imageUrl;
     return this.whenConnected(() => {
