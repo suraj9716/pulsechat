@@ -2,6 +2,7 @@ import { Injectable } from '@angular/core';
 import { MessageResponse } from './chat-api.service';
 import {
   deleteChatHistory,
+  normalizeStorageKey,
   readChatHistory,
   writeChatHistory
 } from '../utils/message-file-store.helper';
@@ -27,27 +28,58 @@ const DB_VERSION = 1;
 @Injectable({ providedIn: 'root' })
 export class LocalMessageStoreService {
   private dbPromise: Promise<IDBDatabase> | null = null;
+  /** In-memory cache avoids reload races wiping the UI after send. */
+  private roomCache = new Map<string, MessageResponse[]>();
+
+  private cacheKey(roomId: string, friendId?: string): string {
+    const room = normalizeStorageKey(roomId);
+    const friend = friendId ? normalizeStorageKey(friendId) : '';
+    return `${room}:${friend}`;
+  }
+
+  private sameId(a: string, b: string): boolean {
+    return String(a).toLowerCase() === String(b).toLowerCase();
+  }
+
+  /** Read from cache, files, and IndexedDB — no writes (safe during save). */
+  private async readStorage(roomId: string, friendId?: string): Promise<MessageResponse[]> {
+    const key = String(roomId);
+    const cached = this.roomCache.get(this.cacheKey(key, friendId));
+    if (cached?.length) {
+      return [...cached];
+    }
+
+    const fromFiles = (await readChatHistory(key, friendId)) ?? [];
+    const fromIdb = await this.readRoomFromIndexedDb(key);
+    return this.mergeMessages(fromFiles, fromIdb);
+  }
 
   /** Load history: device files/localStorage first, IndexedDB as extra backup. */
   async getRoomMessages(roomId: string, friendId?: string): Promise<MessageResponse[]> {
     const key = String(roomId);
-    const fromFiles = (await readChatHistory(key, friendId)) ?? [];
-    const fromIdb = await this.readRoomFromIndexedDb(key);
-    const merged = this.mergeMessages(fromFiles, fromIdb);
+    const merged = await this.readStorage(key, friendId);
+    this.roomCache.set(this.cacheKey(key, friendId), merged);
 
     if (merged.length) {
-      await this.saveRoomHistory(key, merged, friendId);
+      await this.persistStorage(key, merged, friendId);
     }
 
     return merged;
+  }
+
+  private async persistStorage(roomId: string, messages: MessageResponse[], friendId?: string): Promise<void> {
+    const key = String(roomId);
+    const normalized = messages.map((m) => this.normalizeMessage(m, key));
+    await writeChatHistory(key, friendId, normalized);
+    await this.replaceRoomInIndexedDb(key, normalized);
+    this.roomCache.set(this.cacheKey(key, friendId), normalized);
   }
 
   /** Save full chat history to friend folder + localStorage + IndexedDB. */
   async saveRoomHistory(roomId: string, messages: MessageResponse[], friendId?: string): Promise<void> {
     const key = String(roomId);
     const normalized = messages.map((m) => this.normalizeMessage(m, key));
-    await writeChatHistory(key, friendId, normalized);
-    await this.replaceRoomInIndexedDb(key, normalized);
+    await this.persistStorage(key, normalized, friendId);
 
     if (friendId && normalized.length) {
       const last = normalized[normalized.length - 1];
@@ -59,16 +91,19 @@ export class LocalMessageStoreService {
     const chatRoomId = String(msg.chatRoomId || opts?.roomId || '');
     if (!chatRoomId) return;
 
-    const existing = await this.getRoomMessages(chatRoomId, opts?.friendId);
+    const cacheKey = this.cacheKey(chatRoomId, opts?.friendId);
+    const existing = this.roomCache.get(cacheKey) ?? (await this.readStorage(chatRoomId, opts?.friendId));
     const normalized = this.normalizeMessage(msg, chatRoomId);
-    if (existing.some((m) => m.id === normalized.id)) {
+    if (existing.some((m) => this.sameId(m.id, normalized.id))) {
+      this.roomCache.set(cacheKey, existing);
       return;
     }
 
     const next = [...existing, normalized].sort(
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
-    await this.saveRoomHistory(chatRoomId, next, opts?.friendId);
+    this.roomCache.set(cacheKey, next);
+    await this.persistStorage(chatRoomId, next, opts?.friendId);
 
     if (opts?.friendId) {
       await this.updateConversationMeta(normalized, opts.friendId, opts.myUserId, opts.incrementUnread === true);
@@ -128,6 +163,8 @@ export class LocalMessageStoreService {
 
   async deleteRoom(roomId: string, friendId?: string): Promise<void> {
     const key = String(roomId);
+    this.roomCache.delete(this.cacheKey(key, friendId));
+    this.roomCache.delete(this.cacheKey(key));
     await deleteChatHistory(key, friendId);
     const db = await this.openDb();
     const msgs = await this.readRoomFromIndexedDb(key);

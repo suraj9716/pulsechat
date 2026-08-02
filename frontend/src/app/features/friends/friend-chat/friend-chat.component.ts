@@ -838,7 +838,11 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
   private appendMessage(msg: MessageResponse): void {
 
-    this.messages.update((m) => (m.some((x) => x.id === msg.id) ? m : [...m, msg]));
+    this.messages.update((m) =>
+
+      m.some((x) => String(x.id).toLowerCase() === String(msg.id).toLowerCase()) ? m : [...m, msg]
+
+    );
 
   }
 
@@ -852,19 +856,25 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
     if (!room || !content || !this.myId()) return;
 
-    this.chatMessaging.sendText(room, this.myId()!, content, room.participant.id).subscribe({
+    this.newMessage = '';
 
-      next: () => {
+    this.chatMessaging
 
-        this.newMessage = '';
+      .sendText(room, this.myId()!, content, room.participant.id)
 
-        void this.chatMessaging.loadRoomMessages(room.id, this.friendId).then((msgs) => this.messages.set(msgs));
+      .subscribe({
 
-      },
+        next: (msg) => this.appendMessage(msg),
 
-      error: (err) => console.warn('Could not send message', err)
+        error: (err) => {
 
-    });
+          console.warn('Could not send message', err);
+
+          this.newMessage = content;
+
+        }
+
+      });
 
   }
 
@@ -884,7 +894,7 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
         this.chatMessaging.sendImage(room, this.myId()!, url, room.participant.id).subscribe({
 
-          next: () => void this.chatMessaging.loadRoomMessages(room.id, this.friendId).then((msgs) => this.messages.set(msgs)),
+          next: (msg) => this.appendMessage(msg),
 
           error: (err) => console.warn('Could not send image', err)
 

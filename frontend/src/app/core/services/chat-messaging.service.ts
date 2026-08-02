@@ -40,7 +40,7 @@ export class ChatMessagingService {
     myUserId: string,
     text: string,
     friendId?: string
-  ): Observable<void> {
+  ): Observable<MessageResponse> {
     const outbound = this.localStore.createOutboundMessage(room.id, myUserId, room.participant.id, text);
     const fid = friendId ?? room.participant.id;
     return from(this.localStore.saveMessage(outbound, { friendId: fid, myUserId, roomId: room.id })).pipe(
@@ -51,8 +51,9 @@ export class ChatMessagingService {
             catchError(() =>
               this.chatApi
                 .sendMessage(room.id, text, { clientMessageId: outbound.id, timestamp: outbound.timestamp })
-                .pipe(map(() => undefined))
-            )
+                .pipe(map(() => outbound))
+            ),
+            map(() => outbound)
           )
       )
     );
