@@ -37,17 +37,16 @@ export class CallService implements OnDestroy {
   /** True after offer reached the server — hangup signal only sent when this is set. */
   private offerDelivered = false;
   private acceptingCall = false;
+  private localSdpPublished = false;
+  private iceRestartUsed = false;
+  private failedCleanupTimer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
     {
       urls: 'turn:openrelay.metered.ca:80',
-      username: 'openrelayproject',
-      credential: 'openrelayproject'
-    },
-    {
-      urls: 'turn:openrelay.metered.ca:443',
       username: 'openrelayproject',
       credential: 'openrelayproject'
     },
@@ -118,7 +117,7 @@ export class CallService implements OnDestroy {
 
       const offer = await this.pc!.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
       await this.pc!.setLocalDescription(offer);
-      await waitIceGathering(this.pc!);
+      await waitIceGathering(this.pc!, 8000);
       if (!this.canSendForSession(session, id)) {
         return;
       }
@@ -134,6 +133,7 @@ export class CallService implements OnDestroy {
         this.cleanup('failed');
         return;
       }
+      this.localSdpPublished = true;
       this.offerDelivered = true;
 
       void this.ws.ensureConnected(15000).catch(() => {});
@@ -184,6 +184,9 @@ export class CallService implements OnDestroy {
       }
 
       await this.createPeerConnection();
+      this.ensureAudioTransceiver();
+      this.attachLocalStream(micStream);
+      this.setAudioTransceiversSendRecv();
 
       void this.remoteAudio.unlockPlayback();
 
@@ -196,12 +199,9 @@ export class CallService implements OnDestroy {
       this.pendingRemoteDescription = null;
       await this.flushCandidates();
 
-      this.attachLocalStream(micStream);
-      this.setAudioTransceiversSendRecv();
-
       const answer = await this.pc!.createAnswer();
       await this.pc!.setLocalDescription(answer);
-      await waitIceGathering(this.pc!);
+      await waitIceGathering(this.pc!, 8000);
 
       const sent = await this.sendSignal({
         type: 'answer',
@@ -212,6 +212,7 @@ export class CallService implements OnDestroy {
       if (!sent) {
         throw new Error('Could not send answer');
       }
+      this.localSdpPublished = true;
 
       this.markCallActive();
       await this.flushCandidates();
@@ -379,7 +380,9 @@ export class CallService implements OnDestroy {
   }
 
   private toSdpInit(desc: RTCSessionDescription | RTCSessionDescriptionInit): RTCSessionDescriptionInit {
-    return { type: desc.type as RTCSdpType, sdp: fixSdpString(desc.sdp ?? '') };
+    const sdp = (desc.sdp ?? '').trim();
+    const normalized = sdp.endsWith('\r\n') ? sdp : `${sdp}\r\n`;
+    return { type: desc.type as RTCSdpType, sdp: normalized };
   }
 
   private normalizeRemoteSdp(sdp?: RTCSessionDescriptionInit | null): RTCSessionDescriptionInit | null {
@@ -440,13 +443,12 @@ export class CallService implements OnDestroy {
 
   private async createPeerConnection(): Promise<void> {
     if (this.pc) return;
-    this.pc = new RTCPeerConnection({
-      iceServers: this.iceServers,
-      iceCandidatePoolSize: 10,
-      bundlePolicy: 'max-bundle'
-    });
+    this.localSdpPublished = false;
+    this.iceRestartUsed = false;
+    this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
 
     this.pc.onicecandidate = (e) => {
+      if (this.localSdpPublished) return;
       const to = this.remoteUserId();
       const id = this.callId();
       if (!e.candidate || !to || !id || this.state() === 'idle' || this.cancelledCallIds.has(id)) return;
@@ -473,24 +475,65 @@ export class CallService implements OnDestroy {
     this.pc.oniceconnectionstatechange = () => {
       const ice = this.pc?.iceConnectionState;
       if (ice === 'connected' || ice === 'completed') {
+        this.clearFailedCleanupTimer();
+        this.iceRestartUsed = false;
         void this.playRemoteAudio();
+        return;
       }
-      if (ice === 'failed') {
-        this.error.set('Call connection failed. Check network and try again.');
-        this.cleanup('failed');
+      if (ice === 'disconnected' || ice === 'failed') {
+        this.tryRecoverConnection();
       }
     };
 
     this.pc.onconnectionstatechange = () => {
       const state = this.pc?.connectionState;
       if (state === 'connected') {
+        this.clearFailedCleanupTimer();
         void this.playRemoteAudio();
+        return;
       }
       if (state === 'failed') {
-        this.error.set('Call connection lost.');
-        this.cleanup('failed');
+        this.tryRecoverConnection();
       }
     };
+  }
+
+  private tryRecoverConnection(): void {
+    if (!this.pc || this.state() === 'idle') return;
+
+    if (!this.iceRestartUsed && this.pc.remoteDescription) {
+      this.iceRestartUsed = true;
+      try {
+        this.pc.restartIce();
+      } catch {
+        /* ignore */
+      }
+    }
+
+    this.scheduleFailedCleanup();
+  }
+
+  private scheduleFailedCleanup(): void {
+    if (this.failedCleanupTimer) return;
+    this.failedCleanupTimer = setTimeout(() => {
+      this.failedCleanupTimer = null;
+      const ice = this.pc?.iceConnectionState;
+      const conn = this.pc?.connectionState;
+      if (
+        this.state() !== 'idle' &&
+        (ice === 'failed' || conn === 'failed')
+      ) {
+        this.error.set('Call connection lost. Check network and try again.');
+        this.cleanup('failed');
+      }
+    }, 10000);
+  }
+
+  private clearFailedCleanupTimer(): void {
+    if (this.failedCleanupTimer) {
+      clearTimeout(this.failedCleanupTimer);
+      this.failedCleanupTimer = null;
+    }
   }
 
   private ensureAudioTransceiver(): void {
@@ -667,7 +710,10 @@ export class CallService implements OnDestroy {
     this.ringtone.stop();
     this.remoteAudio.stop();
     this.stopAudioMonitor();
+    this.clearFailedCleanupTimer();
     this.speakerOn.set(false);
+    this.localSdpPublished = false;
+    this.iceRestartUsed = false;
 
     this.localStream()?.getTracks().forEach((t) => t.stop());
     this.pc?.close();
