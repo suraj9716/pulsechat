@@ -31,6 +31,8 @@ export class CallService implements OnDestroy {
   private cancelledCallIds = new Set<string>();
   private callSession = 0;
   private recentSignalKeys = new Set<string>();
+  /** True after offer reached the server — hangup signal only sent when this is set. */
+  private offerDelivered = false;
 
   private readonly iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
@@ -65,6 +67,7 @@ export class CallService implements OnDestroy {
       return;
     }
     this.error.set(null);
+    this.offerDelivered = false;
     const id = crypto.randomUUID();
     const session = ++this.callSession;
     this.callId.set(id);
@@ -74,25 +77,15 @@ export class CallService implements OnDestroy {
     void this.ringtone.startOutgoing();
 
     try {
-      try {
-        await this.ws.ensureConnected(15000);
-      } catch {
-        this.error.set('Cannot connect to server. Check internet and refresh the page.');
-        this.cleanup('failed');
-        return;
-      }
-      await this.remoteAudio.unlockPlayback();
       await this.createPeerConnection();
 
-      // Send offer immediately so friend rings — don't wait for mic permission dialog.
       const offer = await this.pc!.createOffer({ offerToReceiveAudio: true });
       await this.pc!.setLocalDescription(offer);
       if (!this.canSendForSession(session, id)) {
-        this.error.set('Call was cancelled.');
-        this.cleanup('failed');
         return;
       }
 
+      // HTTP first — do not wait for WebSocket (that was blocking the ring).
       const sent = await this.sendSignal({
         type: 'offer',
         toUserId,
@@ -100,19 +93,23 @@ export class CallService implements OnDestroy {
         sdp: this.toSdpInit(this.pc!.localDescription ?? offer)
       });
       if (!sent || !this.canSendForSession(session, id)) {
-        this.error.set('Could not reach friend. Restart backend and ensure they are logged in.');
+        this.error.set('Could not reach friend. Is backend running? Is friend logged in?');
         this.cleanup('failed');
         return;
       }
+      this.offerDelivered = true;
+
+      void this.ws.ensureConnected(15000).catch(() => {});
+      void this.remoteAudio.unlockPlayback().catch(() => {});
 
       try {
         await this.addLocalAudioTracks();
       } catch {
-        this.error.set('Microphone unavailable — allow mic access to speak on the call.');
+        this.error.set('Allow microphone access to speak on the call.');
       }
     } catch {
       if (this.callSession === session) {
-        this.error.set('Could not start call. Allow microphone access.');
+        this.error.set('Could not start call.');
         this.cleanup('failed');
       }
     }
@@ -181,14 +178,23 @@ export class CallService implements OnDestroy {
   private endCall(type: 'reject' | 'hangup'): void {
     const to = this.remoteUserId();
     const id = this.callId();
+    const callState = this.state();
+    const shouldNotify = !!(
+      to &&
+      id &&
+      (type === 'reject' ||
+        callState === 'active' ||
+        callState === 'incoming' ||
+        (type === 'hangup' && this.offerDelivered))
+    );
     if (id) {
       this.rememberCancelledCall(id);
     }
-    // Invalidate any in-flight offer/answer before cleanup so delayed publish is blocked.
     this.callSession++;
-    if (to && id) {
-      void this.sendSignal({ type, toUserId: to, callId: id }, true);
+    if (shouldNotify) {
+      void this.sendSignal({ type, toUserId: to!, callId: id! }, true);
     }
+    this.offerDelivered = false;
     this.cleanup(type, false);
   }
 
@@ -210,11 +216,11 @@ export class CallService implements OnDestroy {
     switch (sig.type) {
       case 'offer':
         if (this.shouldRejectOffer(sig)) {
-          void this.sendSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
+          void this.sendSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId }, true);
           return;
         }
         if (this.state() !== 'idle') {
-          void this.sendSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId });
+          void this.sendSignal({ type: 'reject', toUserId: sig.fromUserId, callId: sig.callId }, true);
           return;
         }
         this.callSession++;
@@ -310,11 +316,17 @@ export class CallService implements OnDestroy {
         })
       );
       return true;
-    } catch {
+    } catch (err) {
+      console.warn('Call signal failed', payload.type, err);
       if (optional) {
         return false;
       }
-      return this.ws.sendCallSignal(payload);
+      try {
+        await this.ws.ensureConnected(5000);
+        return this.ws.sendCallSignal(payload);
+      } catch {
+        return false;
+      }
     }
   }
 
@@ -462,5 +474,6 @@ export class CallService implements OnDestroy {
     this.remoteUserId.set(null);
     this.remoteUsername.set(null);
     this.callId.set(null);
+    this.offerDelivered = false;
   }
 }
