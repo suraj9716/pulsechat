@@ -72,12 +72,19 @@ export class ChatMessagingService {
     const fid = friendId ?? room.participant.id;
     return from(this.localStore.saveMessage(outbound, { friendId: fid, myUserId, roomId: room.id })).pipe(
       switchMap(() =>
-        this.chatApi.sendMessage(room.id, '', {
-          messageType: 'IMAGE',
-          imageUrl,
-          clientMessageId: outbound.id,
-          timestamp: outbound.timestamp
-        })
+        this.ws
+          .sendMessage(room.id, '', imageUrl, 'IMAGE', { id: outbound.id, timestamp: outbound.timestamp })
+          .pipe(
+            catchError(() =>
+              this.chatApi.sendMessage(room.id, '', {
+                messageType: 'IMAGE',
+                imageUrl,
+                clientMessageId: outbound.id,
+                timestamp: outbound.timestamp
+              }).pipe(map(() => outbound))
+            ),
+            map(() => outbound)
+          )
       )
     );
   }

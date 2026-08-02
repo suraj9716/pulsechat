@@ -50,6 +50,8 @@ import { isDuplicateMessage } from '../../../core/utils/message-dedup.helper';
 
 import { scrollToBottom } from '../../../core/utils/chat-scroll.helper';
 
+import { prepareImageUpload } from '../../../core/utils/image-upload.helper';
+
 
 
 @Component({
@@ -1172,11 +1174,15 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
     const room = this.currentRoom();
 
-    const file = (event.target as HTMLInputElement).files?.[0];
+    const input = event.target as HTMLInputElement;
+
+    const file = input.files?.[0];
 
     if (!room || !file || !this.myId()) return;
 
-    this.chatApi.uploadImage(file).subscribe({
+    const uploadFile = prepareImageUpload(file);
+
+    this.chatApi.uploadImage(uploadFile).subscribe({
 
       next: ({ url }) => {
 
@@ -1184,17 +1190,17 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
           next: (msg) => this.appendMessage(msg),
 
-          error: (err) => console.warn('Could not send image', err)
+          error: () => this.snackBar.open('Could not send image. Try again.', 'OK', { duration: 4000 })
 
         });
 
       },
 
-      error: (err) => console.warn('Could not upload image', err)
+      error: () => this.snackBar.open('Could not upload image. Use JPG/PNG under 5MB.', 'OK', { duration: 4000 })
 
     });
 
-    (event.target as HTMLInputElement).value = '';
+    input.value = '';
 
   }
 

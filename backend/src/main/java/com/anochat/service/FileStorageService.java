@@ -15,7 +15,9 @@ import java.util.UUID;
 @Service
 public class FileStorageService {
 
-    private static final Set<String> ALLOWED_TYPES = Set.of("image/jpeg", "image/png", "image/gif", "image/webp");
+    private static final Set<String> ALLOWED_EXTENSIONS = Set.of(
+            ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"
+    );
 
     private final Path uploadDir;
 
@@ -28,18 +30,13 @@ public class FileStorageService {
             throw new BadRequestException("Image file is required");
         }
         String contentType = file.getContentType();
-        if (contentType == null || !ALLOWED_TYPES.contains(contentType)) {
-            throw new BadRequestException("Only JPEG, PNG, GIF, and WebP images are allowed");
+        if (!isAllowedImage(contentType, file.getOriginalFilename())) {
+            throw new BadRequestException("Only JPEG, PNG, GIF, WebP, and HEIC images are allowed");
         }
         if (file.getSize() > 5 * 1024 * 1024) {
             throw new BadRequestException("Image must be 5MB or smaller");
         }
-        String ext = switch (contentType) {
-            case "image/png" -> ".png";
-            case "image/gif" -> ".gif";
-            case "image/webp" -> ".webp";
-            default -> ".jpg";
-        };
+        String ext = extensionFor(contentType, file.getOriginalFilename());
         try {
             Files.createDirectories(uploadDir);
             String filename = UUID.randomUUID() + ext;
@@ -49,5 +46,48 @@ public class FileStorageService {
         } catch (IOException e) {
             throw new BadRequestException("Failed to store image");
         }
+    }
+
+    private boolean isAllowedImage(String contentType, String originalFilename) {
+        if (contentType != null) {
+            String normalized = contentType.toLowerCase(java.util.Locale.ROOT);
+            if (Set.of("image/jpeg", "image/jpg", "image/png", "image/gif", "image/webp", "image/heic", "image/heif")
+                    .contains(normalized)) {
+                return true;
+            }
+            if ("application/octet-stream".equals(normalized)) {
+                return hasAllowedExtension(originalFilename);
+            }
+        }
+        return hasAllowedExtension(originalFilename);
+    }
+
+    private boolean hasAllowedExtension(String originalFilename) {
+        if (originalFilename == null || originalFilename.isBlank()) {
+            return false;
+        }
+        String lower = originalFilename.toLowerCase(java.util.Locale.ROOT);
+        return ALLOWED_EXTENSIONS.stream().anyMatch(lower::endsWith);
+    }
+
+    private String extensionFor(String contentType, String originalFilename) {
+        if (originalFilename != null) {
+            String lower = originalFilename.toLowerCase(java.util.Locale.ROOT);
+            for (String ext : ALLOWED_EXTENSIONS) {
+                if (lower.endsWith(ext)) {
+                    return ext.equals(".jpeg") ? ".jpg" : ext;
+                }
+            }
+        }
+        if (contentType == null) {
+            return ".jpg";
+        }
+        return switch (contentType.toLowerCase(java.util.Locale.ROOT)) {
+            case "image/png" -> ".png";
+            case "image/gif" -> ".gif";
+            case "image/webp" -> ".webp";
+            case "image/heic", "image/heif" -> ".heic";
+            default -> ".jpg";
+        };
     }
 }
