@@ -4,6 +4,7 @@ import {
   deleteChatHistory,
   normalizeStorageKey,
   readChatHistory,
+  readFriendHistory,
   writeChatHistory
 } from '../utils/message-file-store.helper';
 
@@ -44,14 +45,14 @@ export class LocalMessageStoreService {
   /** Read from cache, files, and IndexedDB — no writes (safe during save). */
   private async readStorage(roomId: string, friendId?: string): Promise<MessageResponse[]> {
     const key = String(roomId);
-    const cached = this.roomCache.get(this.cacheKey(key, friendId));
-    if (cached?.length) {
-      return [...cached];
-    }
+    const cacheKey = this.cacheKey(key, friendId);
 
     const fromFiles = (await readChatHistory(key, friendId)) ?? [];
+    const fromFriend = friendId ? (await readFriendHistory(friendId)) ?? [] : [];
     const fromIdb = await this.readRoomFromIndexedDb(key);
-    return this.mergeMessages(fromFiles, fromIdb);
+    const cached = this.roomCache.get(cacheKey) ?? [];
+
+    return this.mergeMessages(cached, fromFriend, fromFiles, fromIdb);
   }
 
   /** Load history: device files/localStorage first, IndexedDB as extra backup. */
@@ -92,7 +93,7 @@ export class LocalMessageStoreService {
     if (!chatRoomId) return;
 
     const cacheKey = this.cacheKey(chatRoomId, opts?.friendId);
-    const existing = this.roomCache.get(cacheKey) ?? (await this.readStorage(chatRoomId, opts?.friendId));
+    const existing = await this.readStorage(chatRoomId, opts?.friendId);
     const normalized = this.normalizeMessage(msg, chatRoomId);
     if (existing.some((m) => this.sameId(m.id, normalized.id))) {
       this.roomCache.set(cacheKey, existing);

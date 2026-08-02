@@ -158,7 +158,7 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
               } @else {
 
-                <div class="message-row" [class.sent]="msg.senderId === myId()">
+                <div class="message-row" [class.sent]="isSentByMe(msg)">
 
                   <div class="bubble">
 
@@ -800,7 +800,45 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
   private loadHistory(roomId: string): void {
 
-    void this.chatMessaging.loadRoomMessages(roomId, this.friendId).then((msgs) => this.messages.set(msgs));
+    void this.chatMessaging.loadRoomMessages(roomId, this.friendId).then((msgs) => {
+
+      this.messages.update((current) => this.mergeMessageLists(current, msgs));
+
+    });
+
+  }
+
+
+
+  private mergeMessageLists(...lists: MessageResponse[][]): MessageResponse[] {
+
+    const byId = new Map<string, MessageResponse>();
+
+    for (const list of lists) {
+
+      for (const msg of list) {
+
+        if (msg?.id) byId.set(String(msg.id).toLowerCase(), msg);
+
+      }
+
+    }
+
+    return [...byId.values()].sort(
+
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+
+    );
+
+  }
+
+
+
+  isSentByMe(msg: MessageResponse): boolean {
+
+    const mine = String(this.myId() || '').toLowerCase();
+
+    return mine.length > 0 && String(msg.senderId || '').toLowerCase() === mine;
 
   }
 

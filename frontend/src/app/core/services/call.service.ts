@@ -2,7 +2,7 @@ import { Injectable, OnDestroy, signal } from '@angular/core';
 import { firstValueFrom } from 'rxjs';
 import { WebSocketService, CallSignal } from './websocket.service';
 import { ChatApiService } from './chat-api.service';
-import { CallRingtonePlayer, RemoteAudioPlayer } from '../utils/call-audio.helper';
+import { CallRingtonePlayer, RemoteAudioPlayer, waitIceGathering } from '../utils/call-audio.helper';
 import { callLogContent } from '../utils/call-log.helper';
 import { fixSdpString } from '../utils/call-sdp.helper';
 import { MessageNotificationService } from './message-notification.service';
@@ -104,8 +104,9 @@ export class CallService implements OnDestroy {
         return;
       }
 
-      const offer = await this.pc!.createOffer();
+      const offer = await this.pc!.createOffer({ offerToReceiveAudio: true, offerToReceiveVideo: false });
       await this.pc!.setLocalDescription(offer);
+      await waitIceGathering(this.pc!);
       if (!this.canSendForSession(session, id)) {
         return;
       }
@@ -194,6 +195,7 @@ export class CallService implements OnDestroy {
 
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
+      await waitIceGathering(this.pc);
 
       const sent = await this.sendSignal({
         type: 'answer',
@@ -208,6 +210,8 @@ export class CallService implements OnDestroy {
       this.markCallActive();
       await this.flushCandidates();
       await this.playRemoteAudio();
+      setTimeout(() => void this.playRemoteAudio(), 500);
+      setTimeout(() => void this.playRemoteAudio(), 1500);
     } catch {
       micStream.getTracks().forEach((t) => t.stop());
       this.error.set('Could not connect call. Tap Accept again.');
@@ -268,7 +272,17 @@ export class CallService implements OnDestroy {
   }
 
   private async playRemoteAudio(): Promise<void> {
-    const remote = this.remoteStream();
+    let remote = this.remoteStream();
+    if (!remote && this.pc) {
+      const tracks = this.pc
+        .getReceivers()
+        .map((r) => r.track)
+        .filter((t): t is MediaStreamTrack => !!t && t.kind === 'audio' && t.readyState === 'live');
+      if (tracks.length) {
+        remote = new MediaStream(tracks);
+        this.remoteStream.set(remote);
+      }
+    }
     if (remote) {
       await this.remoteAudio.play(remote);
     }
@@ -296,7 +310,6 @@ export class CallService implements OnDestroy {
         this.messageNotification.notifyIncomingCall(sig);
         this.pendingRemoteDescription = this.normalizeRemoteSdp(sig.sdp);
         await this.createPeerConnection();
-        await this.applyPendingRemoteDescription();
         break;
       case 'answer':
         if (
@@ -314,6 +327,7 @@ export class CallService implements OnDestroy {
           await this.flushCandidates();
           await this.playRemoteAudio();
           setTimeout(() => void this.playRemoteAudio(), 500);
+          setTimeout(() => void this.playRemoteAudio(), 1500);
         }
         break;
       case 'ice':
@@ -420,18 +434,22 @@ export class CallService implements OnDestroy {
 
   private async createPeerConnection(): Promise<void> {
     if (this.pc) return;
-    this.pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    this.pc = new RTCPeerConnection({
+      iceServers: this.iceServers,
+      iceCandidatePoolSize: 10,
+      bundlePolicy: 'max-bundle'
+    });
 
     this.pc.onicecandidate = (e) => {
       const to = this.remoteUserId();
       const id = this.callId();
-      if (!to || !id || this.state() === 'idle' || this.cancelledCallIds.has(id)) return;
+      if (!e.candidate || !to || !id || this.state() === 'idle' || this.cancelledCallIds.has(id)) return;
       void this.sendSignal(
         {
           type: 'ice',
           toUserId: to,
           callId: id,
-          candidate: e.candidate ? e.candidate.toJSON() : { candidate: '' }
+          candidate: e.candidate.toJSON()
         },
         true
       );
@@ -451,6 +469,10 @@ export class CallService implements OnDestroy {
       if (ice === 'connected' || ice === 'completed') {
         void this.playRemoteAudio();
       }
+      if (ice === 'failed') {
+        this.error.set('Call connection failed. Check network and try again.');
+        this.cleanup('failed');
+      }
     };
 
     this.pc.onconnectionstatechange = () => {
@@ -458,7 +480,7 @@ export class CallService implements OnDestroy {
       if (state === 'connected') {
         void this.playRemoteAudio();
       }
-      if (state === 'failed' || state === 'disconnected') {
+      if (state === 'failed') {
         this.error.set('Call connection lost.');
         this.cleanup('failed');
       }

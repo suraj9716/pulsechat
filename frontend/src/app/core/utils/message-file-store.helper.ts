@@ -25,6 +25,17 @@ function lsRoomKey(roomId: string): string {
   return `${LS_PREFIX}:room:${normalizeStorageKey(roomId)}`;
 }
 
+/** Load history for a friend (stable even if room id changes). */
+export async function readFriendHistory(friendId: string): Promise<MessageResponse[] | null> {
+  const sources: (MessageResponse[] | null)[] = [
+    await readViaCapacitor(friendFilePath(friendId)),
+    await readViaOpfs(friendFilePath(friendId)),
+    readLocalStorage(lsFriendKey(friendId))
+  ];
+  const merged = mergeMessageLists(sources.filter((s): s is MessageResponse[] => !!s?.length));
+  return merged.length ? merged : null;
+}
+
 /** Save chat history — friend folder (WhatsApp-style) + room backup + localStorage. */
 export async function writeChatHistory(
   roomId: string,
