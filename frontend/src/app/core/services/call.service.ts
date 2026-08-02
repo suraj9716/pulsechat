@@ -83,8 +83,8 @@ export class CallService implements OnDestroy {
       }
       await this.remoteAudio.unlockPlayback();
       await this.createPeerConnection();
-      await this.addLocalAudioTracks();
 
+      // Send offer immediately so friend rings — don't wait for mic permission dialog.
       const offer = await this.pc!.createOffer({ offerToReceiveAudio: true });
       await this.pc!.setLocalDescription(offer);
       if (!this.canSendForSession(session, id)) {
@@ -100,8 +100,15 @@ export class CallService implements OnDestroy {
         sdp: this.toSdpInit(this.pc!.localDescription ?? offer)
       });
       if (!sent || !this.canSendForSession(session, id)) {
-        this.error.set('Could not reach friend. Ask them to open PulseChat and stay logged in.');
+        this.error.set('Could not reach friend. Restart backend and ensure they are logged in.');
         this.cleanup('failed');
+        return;
+      }
+
+      try {
+        await this.addLocalAudioTracks();
+      } catch {
+        this.error.set('Microphone unavailable — allow mic access to speak on the call.');
       }
     } catch {
       if (this.callSession === session) {
@@ -180,7 +187,7 @@ export class CallService implements OnDestroy {
     // Invalidate any in-flight offer/answer before cleanup so delayed publish is blocked.
     this.callSession++;
     if (to && id) {
-      void this.sendSignal({ type, toUserId: to, callId: id });
+      void this.sendSignal({ type, toUserId: to, callId: id }, true);
     }
     this.cleanup(type, false);
   }
@@ -281,13 +288,16 @@ export class CallService implements OnDestroy {
     return { type: desc.type as RTCSdpType, sdp: desc.sdp ?? '' };
   }
 
-  private async sendSignal(payload: {
-    type: CallSignal['type'];
-    toUserId: string;
-    callId: string;
-    sdp?: RTCSessionDescriptionInit;
-    candidate?: RTCIceCandidateInit;
-  }): Promise<boolean> {
+  private async sendSignal(
+    payload: {
+      type: CallSignal['type'];
+      toUserId: string;
+      callId: string;
+      sdp?: RTCSessionDescriptionInit;
+      candidate?: RTCIceCandidateInit;
+    },
+    optional = false
+  ): Promise<boolean> {
     try {
       await firstValueFrom(
         this.chatApi.relayCallSignal({
@@ -301,6 +311,9 @@ export class CallService implements OnDestroy {
       );
       return true;
     } catch {
+      if (optional) {
+        return false;
+      }
       return this.ws.sendCallSignal(payload);
     }
   }
@@ -319,7 +332,8 @@ export class CallService implements OnDestroy {
           toUserId: to,
           callId: id,
           candidate: e.candidate ? e.candidate.toJSON() : { candidate: '' }
-        }
+        },
+        true
       );
     };
 
