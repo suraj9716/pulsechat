@@ -675,12 +675,12 @@ export class CallService implements OnDestroy {
     }
   }
 
-  private canSendForSession(session: number, callId: string): boolean {
+  private canSendForSession(session: number, callId: string, requirePeerConnection = true): boolean {
     return (
       this.callSession === session &&
       this.callId() === callId &&
       this.state() !== 'idle' &&
-      this.pc != null &&
+      (!requirePeerConnection || this.pc != null) &&
       !this.cancelledCallIds.has(callId)
     );
   }
@@ -725,7 +725,23 @@ export class CallService implements OnDestroy {
 
   private async startLiveKitCall(toUserId: string, id: string, session: number): Promise<void> {
     try {
+      // Ring friend immediately — do not wait for LiveKit connect/token.
+      const sent = await this.sendSignal({
+        type: 'offer',
+        toUserId,
+        callId: id,
+        livekit: true
+      });
+      if (!sent || !this.canSendForSession(session, id, false)) {
+        this.error.set('Could not reach friend. Is friend logged in?');
+        this.cleanup('failed');
+        return;
+      }
+      this.offerDelivered = true;
+
       const { token, url } = await firstValueFrom(this.chatApi.getLiveKitToken(id));
+      if (!this.canSendForSession(session, id, false)) return;
+
       await this.liveKit.connect(url, token, {
         onRemoteParticipant: () => {
           if (this.callSession === session && this.state() === 'outgoing') {
@@ -734,30 +750,15 @@ export class CallService implements OnDestroy {
           }
         },
         onDisconnected: () => {
-          if (this.state() === 'active' || this.state() === 'outgoing') {
+          if (this.state() === 'active') {
             this.error.set('Call disconnected.');
             this.cleanup('failed');
           }
         }
       });
-
-      if (!this.canSendForSession(session, id)) return;
-
-      const sent = await this.sendSignal({
-        type: 'offer',
-        toUserId,
-        callId: id,
-        livekit: true
-      });
-      if (!sent || !this.canSendForSession(session, id)) {
-        this.error.set('Could not reach friend. Is friend logged in?');
-        this.cleanup('failed');
-        return;
-      }
-      this.offerDelivered = true;
     } catch {
       if (this.callSession === session) {
-        this.error.set('Could not start call. Configure LiveKit on the server.');
+        this.error.set('Could not start call. Check LiveKit settings.');
         this.cleanup('failed');
       }
     }
