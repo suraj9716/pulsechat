@@ -50,8 +50,20 @@ export class CallService implements OnDestroy {
       urls: 'turn:openrelay.metered.ca:443',
       username: 'openrelayproject',
       credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turns:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
     }
   ];
+
+  private audioMonitor: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     private ws: WebSocketService,
@@ -165,43 +177,37 @@ export class CallService implements OnDestroy {
     }
 
     try {
-      if (!this.pc) {
-        await this.createPeerConnection();
+      if (this.pc) {
+        this.pc.close();
+        this.pc = null;
+        this.pendingCandidates = [];
       }
-      if (!this.pc) {
-        throw new Error('Peer connection not ready');
-      }
+
+      await this.createPeerConnection();
 
       void this.remoteAudio.unlockPlayback();
 
-      const remoteDesc =
-        this.pendingRemoteDescription ??
-        (this.pc.remoteDescription
-          ? { type: this.pc.remoteDescription.type, sdp: this.pc.remoteDescription.sdp ?? '' }
-          : null);
-
+      const remoteDesc = this.pendingRemoteDescription;
       if (!remoteDesc?.sdp?.trim()) {
         throw new Error('Call offer missing');
       }
 
-      if (!this.pc.remoteDescription) {
-        await this.pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
-        this.pendingRemoteDescription = null;
-        await this.flushCandidates();
-      }
+      await this.pc!.setRemoteDescription(new RTCSessionDescription(remoteDesc));
+      this.pendingRemoteDescription = null;
+      await this.flushCandidates();
 
       this.attachLocalStream(micStream);
       this.setAudioTransceiversSendRecv();
 
-      const answer = await this.pc.createAnswer();
-      await this.pc.setLocalDescription(answer);
-      await waitIceGathering(this.pc);
+      const answer = await this.pc!.createAnswer();
+      await this.pc!.setLocalDescription(answer);
+      await waitIceGathering(this.pc!);
 
       const sent = await this.sendSignal({
         type: 'answer',
         toUserId: remoteId,
         callId,
-        sdp: this.toSdpInit(this.pc.localDescription ?? answer)
+        sdp: this.toSdpInit(this.pc!.localDescription ?? answer)
       });
       if (!sent) {
         throw new Error('Could not send answer');
@@ -269,6 +275,8 @@ export class CallService implements OnDestroy {
   private markCallActive(): void {
     this.callActiveAt = Date.now();
     this.state.set('active');
+    this.startAudioMonitor();
+    void this.enableMobileSpeakerIfNeeded();
   }
 
   private async playRemoteAudio(): Promise<void> {
@@ -309,7 +317,6 @@ export class CallService implements OnDestroy {
         void this.ringtone.startIncoming();
         this.messageNotification.notifyIncomingCall(sig);
         this.pendingRemoteDescription = this.normalizeRemoteSdp(sig.sdp);
-        await this.createPeerConnection();
         break;
       case 'answer':
         if (
@@ -335,13 +342,12 @@ export class CallService implements OnDestroy {
           !sig.callId ||
           sig.callId !== this.callId() ||
           this.cancelledCallIds.has(sig.callId) ||
-          !sig.candidate ||
-          !this.pc
+          !sig.candidate
         ) {
           return;
         }
         if (!sig.candidate.candidate) return;
-        if (this.pc.remoteDescription) {
+        if (this.pc?.remoteDescription) {
           await this.pc.addIceCandidate(new RTCIceCandidate(sig.candidate)).catch(() => {});
         } else {
           this.pendingCandidates.push(sig.candidate);
@@ -493,11 +499,20 @@ export class CallService implements OnDestroy {
     this.pc.addTransceiver('audio', { direction: 'sendrecv' });
   }
 
-  private findAudioSender(): RTCRtpSender | undefined {
+  private findAudioTransceiver(): RTCRtpTransceiver | undefined {
     if (!this.pc) return undefined;
-    const senderWithTrack = this.pc.getSenders().find((s) => s.track?.kind === 'audio');
-    if (senderWithTrack) return senderWithTrack;
-    return this.pc.getTransceivers().find((t) => t.sender)?.sender;
+    return (
+      this.pc.getTransceivers().find(
+        (t) => t.sender.track?.kind === 'audio' || t.receiver.track?.kind === 'audio'
+      ) ?? this.pc.getTransceivers().find((t) => t.mid != null)
+    );
+  }
+
+  private findAudioSender(): RTCRtpSender | undefined {
+    const transceiver = this.findAudioTransceiver();
+    if (transceiver?.sender) return transceiver.sender;
+    if (!this.pc) return undefined;
+    return this.pc.getSenders().find((s) => s.track?.kind === 'audio');
   }
 
   private setAudioTransceiversSendRecv(): void {
@@ -543,9 +558,10 @@ export class CallService implements OnDestroy {
     if (!audioTrack) return;
     audioTrack.enabled = true;
 
-    const sender = this.findAudioSender();
-    if (sender) {
-      void sender.replaceTrack(audioTrack);
+    const transceiver = this.findAudioTransceiver();
+    if (transceiver) {
+      transceiver.direction = 'sendrecv';
+      void transceiver.sender.replaceTrack(audioTrack);
       return;
     }
 
@@ -601,6 +617,33 @@ export class CallService implements OnDestroy {
     );
   }
 
+  private startAudioMonitor(): void {
+    this.stopAudioMonitor();
+    this.audioMonitor = setInterval(() => {
+      if (this.state() === 'active') {
+        void this.playRemoteAudio();
+      }
+    }, 2000);
+  }
+
+  private stopAudioMonitor(): void {
+    if (this.audioMonitor) {
+      clearInterval(this.audioMonitor);
+      this.audioMonitor = null;
+    }
+  }
+
+  private async enableMobileSpeakerIfNeeded(): Promise<void> {
+    if (!/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) {
+      return;
+    }
+    const result = await this.remoteAudio.toggleSpeaker();
+    this.speakerOn.set(this.remoteAudio.isSpeakerOn());
+    if (result.fallback) {
+      await this.playRemoteAudio();
+    }
+  }
+
   private rememberCancelledCall(callId: string): void {
     this.cancelledCallIds.add(callId);
     setTimeout(() => this.cancelledCallIds.delete(callId), 120_000);
@@ -623,6 +666,7 @@ export class CallService implements OnDestroy {
 
     this.ringtone.stop();
     this.remoteAudio.stop();
+    this.stopAudioMonitor();
     this.speakerOn.set(false);
 
     this.localStream()?.getTracks().forEach((t) => t.stop());

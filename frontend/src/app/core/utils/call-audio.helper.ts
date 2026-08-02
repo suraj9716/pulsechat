@@ -6,10 +6,13 @@ export class RemoteAudioPlayer {
   constructor() {
     this.el = document.createElement('audio');
     this.el.autoplay = true;
+    this.el.controls = false;
+    this.el.preload = 'auto';
     this.el.setAttribute('playsinline', 'true');
     this.el.setAttribute('webkit-playsinline', 'true');
+    this.el.setAttribute('x-webkit-airplay', 'allow');
     (this.el as HTMLAudioElement & { playsInline?: boolean }).playsInline = true;
-    this.el.style.display = 'none';
+    this.el.style.cssText = 'position:fixed;width:0;height:0;opacity:0;pointer-events:none;';
     document.body.appendChild(this.el);
   }
 
@@ -27,16 +30,22 @@ export class RemoteAudioPlayer {
   }
 
   async play(stream: MediaStream): Promise<void> {
-    this.el.srcObject = stream;
+    const tracks = stream.getAudioTracks();
+    tracks.forEach((t) => {
+      t.enabled = true;
+    });
+    if (this.el.srcObject !== stream) {
+      this.el.srcObject = stream;
+    }
     this.el.volume = 1;
     this.el.muted = false;
     await this.applySpeaker();
-    for (let attempt = 0; attempt < 5; attempt++) {
+    for (let attempt = 0; attempt < 8; attempt++) {
       try {
         await this.el.play();
         return;
       } catch {
-        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
       }
     }
   }

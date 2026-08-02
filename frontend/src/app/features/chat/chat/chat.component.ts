@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, signal, computed } from '@angular/core';
+import { Component, OnInit, OnDestroy, signal, computed, ViewChild, ElementRef } from '@angular/core';
 
 import { CommonModule } from '@angular/common';
 
@@ -522,11 +522,25 @@ import { environment } from '../../../../environments/environment';
 
             <mat-form-field appearance="outline" class="message-input" subscriptSizing="dynamic">
 
-              <input matInput [(ngModel)]="newMessage" (keydown.enter)="send()" placeholder="Type a message..." />
+              <input
+                #messageInput
+                matInput
+                [(ngModel)]="newMessage"
+                (keydown.enter)="$event.preventDefault(); send()"
+                placeholder="Type a message..."
+              />
 
             </mat-form-field>
 
-            <button mat-fab color="primary" class="send-btn" (click)="send()" [disabled]="!newMessage.trim()">
+            <button
+              mat-fab
+              color="primary"
+              type="button"
+              class="send-btn"
+              (mousedown)="keepComposerFocus($event)"
+              (click)="send()"
+              [disabled]="!newMessage.trim()"
+            >
 
               <mat-icon>send</mat-icon>
 
@@ -1109,6 +1123,8 @@ export class ChatComponent implements OnInit, OnDestroy {
   messages = signal<MessageResponse[]>([]);
 
   newMessage = '';
+
+  @ViewChild('messageInput') private messageInput?: ElementRef<HTMLInputElement>;
 
   searchQuery = '';
 
@@ -1890,7 +1906,13 @@ export class ChatComponent implements OnInit, OnDestroy {
 
     this.chatMessaging.sendText(room, this.myId()!, content, friendId).subscribe({
 
-      next: (msg) => this.appendMessage(msg),
+      next: (msg) => {
+
+        this.appendMessage(msg);
+
+        this.refocusComposer();
+
+      },
 
       error: (apiErr) => {
 
@@ -1898,9 +1920,27 @@ export class ChatComponent implements OnInit, OnDestroy {
 
         this.newMessage = content;
 
+        this.refocusComposer();
+
       }
 
     });
+
+  }
+
+
+
+  keepComposerFocus(event: Event): void {
+
+    event.preventDefault();
+
+  }
+
+
+
+  private refocusComposer(): void {
+
+    setTimeout(() => this.messageInput?.nativeElement?.focus(), 0);
 
   }
 
