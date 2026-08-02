@@ -20,7 +20,7 @@ export interface MessageResponse {
   senderId: string;
   receiverId: string;
   chatRoomId: string;
-  content: string;
+  content: string | null;
   messageType?: 'TEXT' | 'IMAGE' | 'CALL';
   imageUrl?: string;
   status: string;
