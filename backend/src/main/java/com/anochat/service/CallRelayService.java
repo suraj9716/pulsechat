@@ -45,8 +45,45 @@ public class CallRelayService {
         payload.put("fromUsername", from.getUsername());
         payload.put("toUserId", toUserId.toString());
 
+        normalizeSdpPayload(payload);
+
         notificationService.sendCallSignal(toUserId, target.getUsername(), payload);
         log.info("Call signal {} relayed {} -> {}", payload.get("type"), from.getId(), toUserId);
         return true;
+    }
+
+    private void normalizeSdpPayload(Map<String, Object> payload) {
+        Object raw = payload.get("sdp");
+        if (!(raw instanceof Map<?, ?> map)) {
+            return;
+        }
+
+        Object type = map.get("type");
+        Object body = map.get("sdp");
+        if (!(body instanceof String sdp) || sdp.isBlank()) {
+            return;
+        }
+
+        String fixed = sdp.trim();
+        if (!fixed.contains("\n") && fixed.contains("\\n")) {
+            fixed = fixed.replace("\\n", "\n");
+        }
+        fixed = fixed.replace("\r\n", "\n").replace("\r", "\n");
+        if (!fixed.contains("\n") && fixed.matches(".*[a-z]=.*[a-z]=.*")) {
+            fixed = fixed.replaceAll("(?<=[^\\r\\n])(?=[a-z]=)", "\n");
+        }
+
+        StringBuilder sb = new StringBuilder();
+        for (String line : fixed.split("\n")) {
+            String trimmed = line.strip();
+            if (!trimmed.isEmpty()) {
+                sb.append(trimmed).append("\r\n");
+            }
+        }
+
+        Map<String, Object> normalized = new java.util.HashMap<>();
+        normalized.put("type", type != null ? type.toString() : "offer");
+        normalized.put("sdp", sb.toString());
+        payload.put("sdp", normalized);
     }
 }

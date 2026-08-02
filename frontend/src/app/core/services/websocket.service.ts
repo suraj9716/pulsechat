@@ -5,6 +5,7 @@ import { BehaviorSubject, Observable, Subject, filter, map, take, timeout } from
 import { environment } from '../../../environments/environment';
 import { AuthService } from './auth.service';
 import { ChatRoomResponse } from './chat-api.service';
+import { fixSdpString } from '../utils/call-sdp.helper';
 
 export interface ChatMessage {
   id: string;
@@ -539,7 +540,8 @@ export class WebSocketService implements OnDestroy {
     }
     if (sdp && typeof sdp === 'object') {
       const s = sdp as Record<string, unknown>;
-      sdp = { type: s['type'], sdp: s['sdp'] };
+      const body = typeof s['sdp'] === 'string' ? fixSdpString(s['sdp']) : s['sdp'];
+      sdp = { type: s['type'], sdp: body };
     }
 
     let candidate = raw['candidate'];

@@ -188,7 +188,14 @@ import { Subscription } from 'rxjs';
 
             <div class="call-actions">
 
-              <button mat-fab color="primary" (click)="acceptCall()"><mat-icon>call</mat-icon></button>
+              <button
+                mat-fab
+                color="primary"
+                type="button"
+                [disabled]="call.accepting()"
+                (click)="acceptCall()">
+                <mat-icon>{{ call.accepting() ? 'hourglass_top' : 'call' }}</mat-icon>
+              </button>
 
               <button mat-fab color="warn" (click)="rejectCall()"><mat-icon>call_end</mat-icon></button>
 

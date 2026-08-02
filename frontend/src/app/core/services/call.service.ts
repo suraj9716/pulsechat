@@ -4,6 +4,7 @@ import { WebSocketService, CallSignal } from './websocket.service';
 import { ChatApiService } from './chat-api.service';
 import { CallRingtonePlayer, RemoteAudioPlayer } from '../utils/call-audio.helper';
 import { callLogContent } from '../utils/call-log.helper';
+import { fixSdpString } from '../utils/call-sdp.helper';
 import { MessageNotificationService } from './message-notification.service';
 
 export type CallState = 'idle' | 'outgoing' | 'incoming' | 'active';
@@ -20,6 +21,7 @@ export class CallService implements OnDestroy {
   remoteStream = signal<MediaStream | null>(null);
   error = signal<string | null>(null);
   speakerOn = signal(false);
+  accepting = signal(false);
 
   private pc: RTCPeerConnection | null = null;
   private pendingCandidates: RTCIceCandidateInit[] = [];
@@ -33,10 +35,21 @@ export class CallService implements OnDestroy {
   private recentSignalKeys = new Set<string>();
   /** True after offer reached the server — hangup signal only sent when this is set. */
   private offerDelivered = false;
+  private acceptingCall = false;
 
   private readonly iceServers: RTCIceServer[] = [
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' }
+    { urls: 'stun:stun1.l.google.com:19302' },
+    {
+      urls: 'turn:openrelay.metered.ca:80',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    },
+    {
+      urls: 'turn:openrelay.metered.ca:443',
+      username: 'openrelayproject',
+      credential: 'openrelayproject'
+    }
   ];
 
   constructor(
@@ -78,14 +91,23 @@ export class CallService implements OnDestroy {
 
     try {
       await this.createPeerConnection();
+      this.ensureAudioTransceiver();
 
-      const offer = await this.pc!.createOffer({ offerToReceiveAudio: true });
+      // Mic on call click (user gesture) — must be attached before offer for bidirectional audio.
+      try {
+        await this.captureLocalMic();
+      } catch {
+        this.error.set('Allow microphone access to start the call.');
+        this.cleanup('failed');
+        return;
+      }
+
+      const offer = await this.pc!.createOffer();
       await this.pc!.setLocalDescription(offer);
       if (!this.canSendForSession(session, id)) {
         return;
       }
 
-      // HTTP first — do not wait for WebSocket (that was blocking the ring).
       const sent = await this.sendSignal({
         type: 'offer',
         toUserId,
@@ -101,12 +123,6 @@ export class CallService implements OnDestroy {
 
       void this.ws.ensureConnected(15000).catch(() => {});
       void this.remoteAudio.unlockPlayback().catch(() => {});
-
-      try {
-        await this.addLocalAudioTracks();
-      } catch {
-        this.error.set('Allow microphone access to speak on the call.');
-      }
     } catch {
       if (this.callSession === session) {
         this.error.set('Could not start call.');
@@ -116,14 +132,34 @@ export class CallService implements OnDestroy {
   }
 
   async acceptCall(): Promise<void> {
-    if (this.state() !== 'incoming') return;
+    if (this.state() !== 'incoming' || this.acceptingCall) return;
     const callId = this.callId();
     const remoteId = this.remoteUserId();
-    if (!callId || !remoteId) return;
+    if (!callId || !remoteId) {
+      this.error.set('Call data missing. Ask the caller to try again.');
+      return;
+    }
 
+    this.acceptingCall = true;
+    this.accepting.set(true);
     this.error.set(null);
     this.ringtone.stop();
     this.messageNotification.dismissCallNotification(callId);
+
+    // Mic MUST be requested immediately on button click (browser user-gesture rule).
+    let micStream: MediaStream;
+    try {
+      micStream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
+      });
+    } catch {
+      this.acceptingCall = false;
+      this.accepting.set(false);
+      this.error.set('Allow microphone access to answer the call.');
+      void this.ringtone.startIncoming();
+      return;
+    }
 
     try {
       if (!this.pc) {
@@ -133,7 +169,7 @@ export class CallService implements OnDestroy {
         throw new Error('Peer connection not ready');
       }
 
-      await this.remoteAudio.unlockPlayback();
+      void this.remoteAudio.unlockPlayback();
 
       const remoteDesc =
         this.pendingRemoteDescription ??
@@ -142,7 +178,7 @@ export class CallService implements OnDestroy {
           : null);
 
       if (!remoteDesc?.sdp?.trim()) {
-        throw new Error('Call offer missing — ask caller to try again');
+        throw new Error('Call offer missing');
       }
 
       if (!this.pc.remoteDescription) {
@@ -151,7 +187,9 @@ export class CallService implements OnDestroy {
         await this.flushCandidates();
       }
 
-      await this.addLocalAudioTracks();
+      this.attachLocalStream(micStream);
+      this.setAudioTransceiversSendRecv();
+
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
 
@@ -162,17 +200,21 @@ export class CallService implements OnDestroy {
         sdp: this.toSdpInit(this.pc.localDescription ?? answer)
       });
       if (!sent) {
-        throw new Error('Could not send answer to caller');
+        throw new Error('Could not send answer');
       }
 
       this.markCallActive();
       await this.flushCandidates();
       await this.playRemoteAudio();
     } catch {
-      this.error.set('Could not answer. Allow microphone access and tap Accept again.');
+      micStream.getTracks().forEach((t) => t.stop());
+      this.error.set('Could not connect call. Tap Accept again.');
       if (this.state() === 'incoming') {
         void this.ringtone.startIncoming();
       }
+    } finally {
+      this.acceptingCall = false;
+      this.accepting.set(false);
     }
   }
 
@@ -252,6 +294,7 @@ export class CallService implements OnDestroy {
         this.messageNotification.notifyIncomingCall(sig);
         this.pendingRemoteDescription = this.normalizeRemoteSdp(sig.sdp);
         await this.createPeerConnection();
+        await this.applyPendingRemoteDescription();
         break;
       case 'answer':
         if (
@@ -261,7 +304,10 @@ export class CallService implements OnDestroy {
           this.pc
         ) {
           this.ringtone.stop();
-          await this.pc.setRemoteDescription(new RTCSessionDescription(sig.sdp));
+          const answerSdp = this.normalizeRemoteSdp(sig.sdp);
+          if (!answerSdp) return;
+          await this.pc.setRemoteDescription(new RTCSessionDescription(answerSdp));
+          await this.ensureLocalMicAttached();
           this.markCallActive();
           await this.flushCandidates();
           await this.playRemoteAudio();
@@ -311,14 +357,27 @@ export class CallService implements OnDestroy {
   }
 
   private toSdpInit(desc: RTCSessionDescription | RTCSessionDescriptionInit): RTCSessionDescriptionInit {
-    return { type: desc.type as RTCSdpType, sdp: desc.sdp ?? '' };
+    return { type: desc.type as RTCSdpType, sdp: fixSdpString(desc.sdp ?? '') };
   }
 
   private normalizeRemoteSdp(sdp?: RTCSessionDescriptionInit | null): RTCSessionDescriptionInit | null {
     if (!sdp) return null;
-    const body = typeof sdp.sdp === 'string' ? sdp.sdp.trim() : '';
+    const body = typeof sdp.sdp === 'string' ? fixSdpString(sdp.sdp) : '';
     if (!body) return null;
     return { type: (sdp.type ?? 'offer') as RTCSdpType, sdp: body };
+  }
+
+  private async applyPendingRemoteDescription(): Promise<void> {
+    if (!this.pc || !this.pendingRemoteDescription || this.pc.remoteDescription) {
+      return;
+    }
+    try {
+      await this.pc.setRemoteDescription(new RTCSessionDescription(this.pendingRemoteDescription));
+      this.pendingRemoteDescription = null;
+      await this.flushCandidates();
+    } catch (err) {
+      console.warn('Could not apply remote offer', err);
+    }
   }
 
   private async sendSignal(
@@ -378,9 +437,18 @@ export class CallService implements OnDestroy {
 
     this.pc.ontrack = (e) => {
       if (e.track.kind !== 'audio') return;
+      e.track.enabled = true;
       const stream = e.streams[0] ?? new MediaStream([e.track]);
       this.remoteStream.set(stream);
       void this.remoteAudio.play(stream);
+      e.track.onunmute = () => void this.remoteAudio.play(stream);
+    };
+
+    this.pc.oniceconnectionstatechange = () => {
+      const ice = this.pc?.iceConnectionState;
+      if (ice === 'connected' || ice === 'completed') {
+        void this.playRemoteAudio();
+      }
     };
 
     this.pc.onconnectionstatechange = () => {
@@ -395,12 +463,29 @@ export class CallService implements OnDestroy {
     };
   }
 
-  private async addLocalAudioTracks(): Promise<void> {
+  private ensureAudioTransceiver(): void {
     if (!this.pc) return;
+    if (this.findAudioSender()) return;
+    this.pc.addTransceiver('audio', { direction: 'sendrecv' });
+  }
 
-    const existingSender = this.pc.getSenders().find((s) => s.track?.kind === 'audio');
-    if (existingSender?.track) return;
+  private findAudioSender(): RTCRtpSender | undefined {
+    if (!this.pc) return undefined;
+    const senderWithTrack = this.pc.getSenders().find((s) => s.track?.kind === 'audio');
+    if (senderWithTrack) return senderWithTrack;
+    return this.pc.getTransceivers().find((t) => t.sender)?.sender;
+  }
 
+  private setAudioTransceiversSendRecv(): void {
+    if (!this.pc) return;
+    for (const transceiver of this.pc.getTransceivers()) {
+      if (transceiver.sender.track?.kind === 'audio' || transceiver.receiver.track?.kind === 'audio') {
+        transceiver.direction = 'sendrecv';
+      }
+    }
+  }
+
+  private async captureLocalMic(): Promise<void> {
     const stream = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
       video: false
@@ -409,19 +494,45 @@ export class CallService implements OnDestroy {
       stream.getTracks().forEach((t) => t.stop());
       return;
     }
+    this.attachLocalStream(stream);
+  }
 
+  private async ensureLocalMicAttached(): Promise<void> {
+    if (!this.pc) return;
+    if (this.localStream()?.getAudioTracks().some((t) => t.readyState === 'live')) {
+      return;
+    }
+    try {
+      await this.captureLocalMic();
+    } catch {
+      this.error.set('Allow microphone access to speak on the call.');
+    }
+  }
+
+  private attachLocalStream(stream: MediaStream): void {
+    if (!this.pc) return;
+
+    this.localStream()?.getTracks().forEach((t) => t.stop());
     this.localStream.set(stream);
 
     const audioTrack = stream.getAudioTracks()[0];
     if (!audioTrack) return;
+    audioTrack.enabled = true;
 
-    const audioSender = this.pc.getSenders().find((s) => s.track?.kind === 'audio');
-    if (audioSender) {
-      await audioSender.replaceTrack(audioTrack);
+    const sender = this.findAudioSender();
+    if (sender) {
+      void sender.replaceTrack(audioTrack);
       return;
     }
 
     this.pc.addTrack(audioTrack, stream);
+  }
+
+  private async addLocalAudioTracks(): Promise<void> {
+    if (!this.pc || this.localStream()?.getAudioTracks().some((t) => t.readyState === 'live')) {
+      return;
+    }
+    await this.captureLocalMic();
   }
 
   private async flushCandidates(): Promise<void> {
