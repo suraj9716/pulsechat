@@ -182,6 +182,10 @@ import { Subscription } from 'rxjs';
 
             <p><strong>{{ call.remoteUsername() }}</strong> is calling...</p>
 
+            @if (call.error()) {
+              <p class="call-error">{{ call.error() }}</p>
+            }
+
             <div class="call-actions">
 
               <button mat-fab color="primary" (click)="acceptCall()"><mat-icon>call</mat-icon></button>

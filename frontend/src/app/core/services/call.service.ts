@@ -116,26 +116,44 @@ export class CallService implements OnDestroy {
   }
 
   async acceptCall(): Promise<void> {
-    if (this.state() !== 'incoming' || !this.pc) return;
+    if (this.state() !== 'incoming') return;
     const callId = this.callId();
     const remoteId = this.remoteUserId();
     if (!callId || !remoteId) return;
-    const session = this.callSession;
+
     this.error.set(null);
     this.ringtone.stop();
     this.messageNotification.dismissCallNotification(callId);
 
     try {
+      if (!this.pc) {
+        await this.createPeerConnection();
+      }
+      if (!this.pc) {
+        throw new Error('Peer connection not ready');
+      }
+
       await this.remoteAudio.unlockPlayback();
-      if (this.pendingRemoteDescription) {
-        await this.pc.setRemoteDescription(new RTCSessionDescription(this.pendingRemoteDescription));
+
+      const remoteDesc =
+        this.pendingRemoteDescription ??
+        (this.pc.remoteDescription
+          ? { type: this.pc.remoteDescription.type, sdp: this.pc.remoteDescription.sdp ?? '' }
+          : null);
+
+      if (!remoteDesc?.sdp?.trim()) {
+        throw new Error('Call offer missing — ask caller to try again');
+      }
+
+      if (!this.pc.remoteDescription) {
+        await this.pc.setRemoteDescription(new RTCSessionDescription(remoteDesc));
         this.pendingRemoteDescription = null;
         await this.flushCandidates();
       }
+
       await this.addLocalAudioTracks();
       const answer = await this.pc.createAnswer();
       await this.pc.setLocalDescription(answer);
-      if (!this.canSendForSession(session, callId)) return;
 
       const sent = await this.sendSignal({
         type: 'answer',
@@ -143,15 +161,17 @@ export class CallService implements OnDestroy {
         callId,
         sdp: this.toSdpInit(this.pc.localDescription ?? answer)
       });
-      if (!sent) return;
+      if (!sent) {
+        throw new Error('Could not send answer to caller');
+      }
 
       this.markCallActive();
       await this.flushCandidates();
       await this.playRemoteAudio();
     } catch {
-      if (this.callSession === session) {
-        this.error.set('Could not answer call.');
-        this.rejectCall();
+      this.error.set('Could not answer. Allow microphone access and tap Accept again.');
+      if (this.state() === 'incoming') {
+        void this.ringtone.startIncoming();
       }
     }
   }
@@ -230,7 +250,7 @@ export class CallService implements OnDestroy {
         this.state.set('incoming');
         void this.ringtone.startIncoming();
         this.messageNotification.notifyIncomingCall(sig);
-        this.pendingRemoteDescription = sig.sdp ?? null;
+        this.pendingRemoteDescription = this.normalizeRemoteSdp(sig.sdp);
         await this.createPeerConnection();
         break;
       case 'answer':
@@ -292,6 +312,13 @@ export class CallService implements OnDestroy {
 
   private toSdpInit(desc: RTCSessionDescription | RTCSessionDescriptionInit): RTCSessionDescriptionInit {
     return { type: desc.type as RTCSdpType, sdp: desc.sdp ?? '' };
+  }
+
+  private normalizeRemoteSdp(sdp?: RTCSessionDescriptionInit | null): RTCSessionDescriptionInit | null {
+    if (!sdp) return null;
+    const body = typeof sdp.sdp === 'string' ? sdp.sdp.trim() : '';
+    if (!body) return null;
+    return { type: (sdp.type ?? 'offer') as RTCSdpType, sdp: body };
   }
 
   private async sendSignal(
@@ -388,16 +415,13 @@ export class CallService implements OnDestroy {
     const audioTrack = stream.getAudioTracks()[0];
     if (!audioTrack) return;
 
-    const recvTransceiver = this.pc.getTransceivers().find(
-      (t) => t.receiver.track?.kind === 'audio' || (t.mid && t.direction.includes('recv'))
-    );
-
-    if (recvTransceiver && !recvTransceiver.sender.track) {
-      await recvTransceiver.sender.replaceTrack(audioTrack);
-      recvTransceiver.direction = 'sendrecv';
-    } else if (!existingSender) {
-      this.pc.addTrack(audioTrack, stream);
+    const audioSender = this.pc.getSenders().find((s) => s.track?.kind === 'audio');
+    if (audioSender) {
+      await audioSender.replaceTrack(audioTrack);
+      return;
     }
+
+    this.pc.addTrack(audioTrack, stream);
   }
 
   private async flushCandidates(): Promise<void> {
