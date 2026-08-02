@@ -24,6 +24,8 @@ export class CallService implements OnDestroy {
   error = signal<string | null>(null);
   speakerOn = signal(false);
   accepting = signal(false);
+  /** Elapsed seconds while call is active (updates every second). */
+  callDurationSeconds = signal(0);
 
   private pc: RTCPeerConnection | null = null;
   private pendingCandidates: RTCIceCandidateInit[] = [];
@@ -64,6 +66,7 @@ export class CallService implements OnDestroy {
   ];
 
   private audioMonitor: ReturnType<typeof setInterval> | null = null;
+  private durationTimer: ReturnType<typeof setInterval> | null = null;
   private liveKit = new LiveKitCallSession();
   private callMode: 'livekit' | 'webrtc' | null = null;
   private incomingUsesLiveKit = false;
@@ -298,6 +301,7 @@ export class CallService implements OnDestroy {
   private markCallActive(): void {
     this.callActiveAt = Date.now();
     this.state.set('active');
+    this.startDurationTimer();
     this.startAudioMonitor();
     void this.enableMobileSpeakerIfNeeded();
   }
@@ -701,6 +705,24 @@ export class CallService implements OnDestroy {
     }
   }
 
+  private startDurationTimer(): void {
+    this.stopDurationTimer();
+    this.callDurationSeconds.set(0);
+    this.durationTimer = setInterval(() => {
+      if (this.callActiveAt != null) {
+        this.callDurationSeconds.set(Math.floor((Date.now() - this.callActiveAt) / 1000));
+      }
+    }, 1000);
+  }
+
+  private stopDurationTimer(): void {
+    if (this.durationTimer) {
+      clearInterval(this.durationTimer);
+      this.durationTimer = null;
+    }
+    this.callDurationSeconds.set(0);
+  }
+
   private async enableMobileSpeakerIfNeeded(): Promise<void> {
     if (!/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) {
       return;
@@ -801,6 +823,7 @@ export class CallService implements OnDestroy {
     this.ringtone.stop();
     this.remoteAudio.stop();
     this.stopAudioMonitor();
+    this.stopDurationTimer();
     this.clearFailedCleanupTimer();
     this.speakerOn.set(false);
     this.localSdpPublished = false;

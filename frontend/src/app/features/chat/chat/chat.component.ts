@@ -50,6 +50,10 @@ import { APP_NAME } from '../../../core/constants/app.constants';
 
 import { mediaUrl } from '../../../core/utils/media-url';
 
+import { isDuplicateMessage } from '../../../core/utils/message-dedup.helper';
+
+import { scrollToBottom } from '../../../core/utils/chat-scroll.helper';
+
 import { Subscription, filter, skip } from 'rxjs';
 
 import { environment } from '../../../../environments/environment';
@@ -456,7 +460,7 @@ import { environment } from '../../../../environments/environment';
 
 
 
-          <div class="messages-container">
+          <div class="messages-container" #scrollArea>
 
             @for (msg of messages(); track msg.id) {
 
@@ -516,35 +520,39 @@ import { environment } from '../../../../environments/environment';
 
           <footer class="composer">
 
-            <input #imageInput type="file" accept="image/*" hidden (change)="onImageSelected($event)" />
+            <div class="composer-card">
 
-            <button mat-icon-button type="button" (click)="imageInput.click()"><mat-icon>photo_camera</mat-icon></button>
+              <input #imageInput type="file" accept="image/*" hidden (change)="onImageSelected($event)" />
 
-            <mat-form-field appearance="outline" class="message-input" subscriptSizing="dynamic">
+              <button mat-icon-button type="button" class="attach-btn" (click)="imageInput.click()"><mat-icon>add_photo_alternate</mat-icon></button>
 
-              <input
-                #messageInput
-                matInput
-                [(ngModel)]="newMessage"
-                (keydown.enter)="$event.preventDefault(); send()"
-                placeholder="Type a message..."
-              />
+              <div class="input-pill">
 
-            </mat-form-field>
+                <input
+                  #messageInput
+                  class="message-field"
+                  [(ngModel)]="newMessage"
+                  (keydown.enter)="$event.preventDefault(); send()"
+                  placeholder="Message..."
+                  autocomplete="off"
+                />
 
-            <button
-              mat-fab
-              color="primary"
-              type="button"
-              class="send-btn"
-              (mousedown)="keepComposerFocus($event)"
-              (click)="send()"
-              [disabled]="!newMessage.trim()"
-            >
+              </div>
 
-              <mat-icon>send</mat-icon>
+              <button
+                type="button"
+                class="send-btn"
+                (mousedown)="keepComposerFocus($event)"
+                (click)="send()"
+                [disabled]="!newMessage.trim()"
+                aria-label="Send message"
+              >
 
-            </button>
+                <mat-icon>send</mat-icon>
+
+              </button>
+
+            </div>
 
           </footer>
 
@@ -930,21 +938,25 @@ import { environment } from '../../../../environments/environment';
 
     .chat-shell {
 
-      max-width: 820px; margin: 16px auto; height: calc(100vh - 96px);
+      max-width: 860px; margin: 16px auto; height: calc(100vh - 96px);
 
       display: flex; flex-direction: column; background: #fff;
 
-      border-radius: 20px; overflow: hidden;
+      border-radius: 24px; overflow: hidden;
 
-      box-shadow: 0 8px 32px rgba(102, 126, 234, 0.12);
+      box-shadow: 0 20px 50px rgba(79, 98, 196, 0.14);
 
     }
 
     .chat-header {
 
-      display: flex; align-items: center; gap: 12px; padding: 14px 16px;
+      display: flex; align-items: center; gap: 12px; padding: 14px 18px;
 
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; flex-wrap: wrap;
+      background: linear-gradient(120deg, #5c6fd6 0%, #7b5eb8 55%, #8b5cf6 100%);
+
+      color: #fff; flex-wrap: wrap;
+
+      box-shadow: 0 4px 20px rgba(92, 111, 214, 0.25);
 
     }
 
@@ -960,49 +972,93 @@ import { environment } from '../../../../environments/environment';
 
     .header-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 
-    .messages-container { flex: 1; overflow-y: auto; padding: 20px 16px; background: #f8f9fd; }
+    .messages-container { flex: 1; overflow-y: auto; padding: 20px 18px 12px; background: #f6f8fd; overflow-anchor: auto; }
 
-    .message-row { display: flex; margin-bottom: 10px; }
+    .message-row { display: flex; margin-bottom: 8px; }
 
     .message-row.sent { justify-content: flex-end; }
 
     .bubble {
 
-      max-width: 75%; padding: 10px 14px; border-radius: 16px;
+      max-width: min(78%, 520px); padding: 11px 14px 8px; border-radius: 18px;
 
-      background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+      background: #fff; box-shadow: 0 2px 10px rgba(30, 41, 80, 0.07);
+
+      border: 1px solid rgba(0, 0, 0, 0.04);
 
     }
 
     .message-row.sent .bubble {
 
-      background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
+      background: linear-gradient(135deg, #667eea 0%, #7c6cf0 50%, #764ba2 100%); color: #fff;
 
-      border-bottom-right-radius: 4px;
+      border-bottom-right-radius: 6px; border: none;
+
+      box-shadow: 0 4px 16px rgba(102, 126, 234, 0.35);
 
     }
 
-    .message-row:not(.sent) .bubble { border-bottom-left-radius: 4px; }
+    .message-row:not(.sent) .bubble { border-bottom-left-radius: 6px; }
 
-    .content { display: block; word-break: break-word; line-height: 1.45; }
+    .content { display: block; word-break: break-word; line-height: 1.5; font-size: 0.95rem; }
 
-    .time { font-size: 0.7rem; opacity: 0.75; display: block; margin-top: 4px; text-align: right; }
+    .time { font-size: 0.68rem; opacity: 0.72; display: block; margin-top: 6px; text-align: right; }
 
-    .chat-image { max-width: 240px; max-height: 240px; border-radius: 10px; display: block; margin-bottom: 4px; }
+    .chat-image { max-width: 260px; max-height: 260px; border-radius: 12px; display: block; margin-bottom: 6px; }
 
     .typing-indicator { font-style: italic; color: #666; padding: 8px; }
 
     .composer {
 
-      display: flex; align-items: center; gap: 8px;
+      padding: 12px 14px max(14px, env(safe-area-inset-bottom));
 
-      padding: 12px 16px 16px; background: #fff; border-top: 1px solid #eee;
+      background: linear-gradient(180deg, #fffc 0%, #fff 100%);
+
+      border-top: 1px solid rgba(0, 0, 0, 0.06);
 
     }
 
-    .message-input { flex: 1; margin: 0; }
+    .composer-card {
 
-    .send-btn { width: 48px; height: 48px; box-shadow: 0 4px 14px rgba(102, 126, 234, 0.4); }
+      display: flex; align-items: flex-end; gap: 6px; padding: 8px 10px;
+
+      border-radius: 28px; background: #f3f5fb;
+
+      border: 1px solid rgba(102, 126, 234, 0.12);
+
+      box-shadow: inset 0 1px 0 #fff, 0 4px 18px rgba(79, 98, 196, 0.08);
+
+    }
+
+    .attach-btn { color: #667eea !important; flex-shrink: 0; }
+
+    .input-pill { flex: 1; min-width: 0; }
+
+    .message-field {
+
+      width: 100%; border: none; outline: none; background: transparent;
+
+      font-size: 0.96rem; line-height: 1.45; padding: 8px 4px; color: #1a1f36; font-family: inherit;
+
+    }
+
+    .message-field::placeholder { color: #9aa3b8; }
+
+    .send-btn {
+
+      width: 44px; height: 44px; border: none; border-radius: 50%; flex-shrink: 0;
+
+      display: flex; align-items: center; justify-content: center; cursor: pointer;
+
+      background: linear-gradient(135deg, #667eea, #764ba2); color: #fff;
+
+      box-shadow: 0 6px 18px rgba(102, 126, 234, 0.45);
+
+    }
+
+    .send-btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+
+    .send-btn mat-icon { font-size: 20px; width: 20px; height: 20px; margin-left: 2px; }
 
     .friend-prompt { font-size: 0.85rem; margin-right: 6px; }
 
@@ -1022,23 +1078,25 @@ import { environment } from '../../../../environments/environment';
 
     }
 
-    .call-log-row { display: flex; justify-content: center; margin: 12px 0; }
+    .call-log-row { display: flex; justify-content: center; margin: 14px 0; }
 
     .call-log-bubble {
 
       display: inline-flex; align-items: center; gap: 8px;
 
-      padding: 8px 14px; border-radius: 999px;
+      padding: 9px 16px; border-radius: 999px;
 
-      background: #eef1fb; color: #555; font-size: 0.85rem;
+      background: #fff; color: #5c6370; font-size: 0.84rem;
 
-      box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+      box-shadow: 0 2px 10px rgba(30, 41, 80, 0.08);
+
+      border: 1px solid rgba(102, 126, 234, 0.1);
 
     }
 
     .call-log-bubble mat-icon { font-size: 18px; width: 18px; height: 18px; color: #667eea; }
 
-    .call-time { font-size: 0.72rem; opacity: 0.75; margin-left: 4px; }
+    .call-time { font-size: 0.72rem; opacity: 0.7; margin-left: 2px; }
 
     @media (max-width: 768px) {
 
@@ -1102,9 +1160,11 @@ import { environment } from '../../../../environments/environment';
 
       .chat-image { max-width: min(240px, 70vw); max-height: min(240px, 50vh); }
 
-      .composer { padding: 8px 10px 12px; gap: 4px; }
+      .composer { padding: 8px 10px max(12px, env(safe-area-inset-bottom)); }
 
-      .send-btn { width: 44px; height: 44px; }
+      .composer-card { padding: 6px 8px; border-radius: 24px; }
+
+      .send-btn { width: 40px; height: 40px; }
 
     }
 
@@ -1125,6 +1185,8 @@ export class ChatComponent implements OnInit, OnDestroy {
   newMessage = '';
 
   @ViewChild('messageInput') private messageInput?: ElementRef<HTMLInputElement>;
+
+  @ViewChild('scrollArea') private scrollArea?: ElementRef<HTMLElement>;
 
   searchQuery = '';
 
@@ -1542,6 +1604,8 @@ export class ChatComponent implements OnInit, OnDestroy {
 
       this.messages.update((current) => this.mergeMessageLists(current, msgs));
 
+      this.scrollToLatest();
+
     });
 
   }
@@ -1594,6 +1658,12 @@ export class ChatComponent implements OnInit, OnDestroy {
 
       next: (msg: ChatMessage) => {
 
+        if (this.isSentByMe(msg as MessageResponse)) {
+
+          return;
+
+        }
+
         const room = this.currentRoom();
 
         void this.chatMessaging
@@ -1636,9 +1706,21 @@ export class ChatComponent implements OnInit, OnDestroy {
 
     this.messages.update((m) =>
 
-      m.some((x) => String(x.id).toLowerCase() === String(msg.id).toLowerCase()) ? m : [...m, msg]
+      m.some((x) => isDuplicateMessage(x, msg)) ? m : [...m, msg]
 
     );
+
+    this.scrollToLatest();
+
+  }
+
+
+
+  private scrollToLatest(): void {
+
+    scrollToBottom(this.scrollArea?.nativeElement);
+
+    setTimeout(() => scrollToBottom(this.scrollArea?.nativeElement), 50);
 
   }
 

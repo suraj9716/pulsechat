@@ -10,8 +10,6 @@ import { MatCardModule } from '@angular/material/card';
 
 import { MatButtonModule } from '@angular/material/button';
 
-import { MatFormFieldModule } from '@angular/material/form-field';
-
 import { MatInputModule } from '@angular/material/input';
 
 import { MatIconModule } from '@angular/material/icon';
@@ -46,6 +44,12 @@ import { ChatMessagingService } from '../../../core/services/chat-messaging.serv
 
 import { LocalMessageStoreService } from '../../../core/services/local-message-store.service';
 
+import { formatLiveCallTimer } from '../../../core/utils/call-log.helper';
+
+import { isDuplicateMessage } from '../../../core/utils/message-dedup.helper';
+
+import { scrollToBottom } from '../../../core/utils/chat-scroll.helper';
+
 
 
 @Component({
@@ -65,8 +69,6 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
     MatCardModule,
 
     MatButtonModule,
-
-    MatFormFieldModule,
 
     MatInputModule,
 
@@ -104,7 +106,11 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
             </button>
 
-            <div class="avatar">{{ initials(currentRoom()!.participant.username) }}</div>
+            <div class="avatar-wrap">
+
+              <div class="avatar" [class.online-ring]="currentRoom()!.participant.onlineStatus">{{ initials(currentRoom()!.participant.username) }}</div>
+
+            </div>
 
             <div class="header-info">
 
@@ -118,9 +124,13 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
             </div>
 
-            <button mat-icon-button class="call-btn" (click)="startCall()" title="Voice call"><mat-icon>call</mat-icon></button>
+            <button mat-icon-button class="call-btn" (click)="startCall()" title="Voice call" [class.calling]="activeCallWithFriend()">
 
-            <button mat-icon-button [matMenuTriggerFor]="chatMenu"><mat-icon>more_vert</mat-icon></button>
+              <mat-icon>{{ activeCallWithFriend() ? 'call' : 'call' }}</mat-icon>
+
+            </button>
+
+            <button mat-icon-button class="menu-btn" [matMenuTriggerFor]="chatMenu"><mat-icon>more_vert</mat-icon></button>
 
             <mat-menu #chatMenu="matMenu">
 
@@ -136,6 +146,34 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
 
 
+          @if (activeCallWithFriend()) {
+
+            <div class="call-live-bar" [class.ringing]="callService.state() !== 'active'">
+
+              <span class="live-dot"></span>
+
+              <mat-icon>call</mat-icon>
+
+              <span class="live-label">
+
+                {{ callService.state() === 'active' ? 'On call' : 'Calling...' }}
+
+              </span>
+
+              @if (callService.state() === 'active') {
+
+                <span class="live-timer">{{ liveCallTimer() }}</span>
+
+              }
+
+              <button mat-stroked-button class="end-mini" (click)="hangUpCall()">End</button>
+
+            </div>
+
+          }
+
+
+
           <div class="messages-container" #scrollArea>
 
             @for (msg of messages(); track msg.id) {
@@ -144,9 +182,9 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
                 <div class="call-log-row">
 
-                  <div class="call-log-bubble">
+                  <div class="call-log-bubble" [class.missed]="isMissedCall(msg)">
 
-                    <mat-icon>call</mat-icon>
+                    <mat-icon>{{ isMissedCall(msg) ? 'phone_missed' : 'phone_in_talk' }}</mat-icon>
 
                     <span>{{ msg.content }}</span>
 
@@ -190,39 +228,43 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
           <footer class="composer">
 
-            <input #imageInput type="file" accept="image/*" hidden (change)="onImageSelected($event)" />
+            <div class="composer-card">
 
-            <button mat-icon-button type="button" class="attach-btn" (click)="imageInput.click()" title="Attach image">
+              <input #imageInput type="file" accept="image/*" hidden (change)="onImageSelected($event)" />
 
-              <mat-icon>photo_camera</mat-icon>
+              <button mat-icon-button type="button" class="attach-btn" (click)="imageInput.click()" title="Attach image">
 
-            </button>
+                <mat-icon>add_photo_alternate</mat-icon>
 
-            <mat-form-field appearance="outline" class="message-input" subscriptSizing="dynamic">
+              </button>
 
-              <input
-                #messageInput
-                matInput
-                [(ngModel)]="newMessage"
-                (keydown.enter)="$event.preventDefault(); send()"
-                placeholder="Type a message..."
-              />
+              <div class="input-pill">
 
-            </mat-form-field>
+                <input
+                  #messageInput
+                  class="message-field"
+                  [(ngModel)]="newMessage"
+                  (keydown.enter)="$event.preventDefault(); send()"
+                  placeholder="Message..."
+                  autocomplete="off"
+                />
 
-            <button
-              mat-fab
-              color="primary"
-              type="button"
-              class="send-btn"
-              (mousedown)="keepComposerFocus($event)"
-              (click)="send()"
-              [disabled]="!newMessage.trim()"
-            >
+              </div>
 
-              <mat-icon>send</mat-icon>
+              <button
+                type="button"
+                class="send-btn"
+                (mousedown)="keepComposerFocus($event)"
+                (click)="send()"
+                [disabled]="!newMessage.trim()"
+                aria-label="Send message"
+              >
 
-            </button>
+                <mat-icon>send</mat-icon>
+
+              </button>
+
+            </div>
 
           </footer>
 
@@ -240,7 +282,7 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
       min-height: calc(100vh - 64px);
 
-      background: linear-gradient(180deg, #eef1fb 0%, #f7f8fc 40%);
+      background: linear-gradient(165deg, #e8ecff 0%, #f4f6fc 45%, #fafbff 100%);
 
       padding: 16px;
 
@@ -276,7 +318,7 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
     .chat-shell {
 
-      max-width: 820px;
+      max-width: 860px;
 
       margin: 0 auto;
 
@@ -288,13 +330,13 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
       background: #fff;
 
-      border-radius: 20px;
+      border-radius: 24px;
 
       overflow: hidden;
 
-      box-shadow: 0 8px 32px rgba(102, 126, 234, 0.12);
+      box-shadow: 0 20px 50px rgba(79, 98, 196, 0.14);
 
-      border: 1px solid rgba(0, 0, 0, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.8);
 
     }
 
@@ -306,35 +348,37 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
       align-items: center;
 
-      gap: 12px;
+      gap: 10px;
 
-      padding: 14px 16px;
+      padding: 14px 18px;
 
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      background: linear-gradient(120deg, #5c6fd6 0%, #7b5eb8 55%, #8b5cf6 100%);
 
       color: #fff;
 
-    }
-
-
-
-    .back-btn {
-
-      color: #fff !important;
+      box-shadow: 0 4px 20px rgba(92, 111, 214, 0.25);
 
     }
 
 
+
+    .back-btn, .call-btn, .menu-btn { color: #fff !important; }
+
+    .call-btn.calling { animation: callPulse 1.4s ease-in-out infinite; }
+
+
+
+    .avatar-wrap { flex-shrink: 0; }
 
     .avatar {
 
-      width: 42px;
+      width: 44px;
 
-      height: 42px;
+      height: 44px;
 
       border-radius: 50%;
 
-      background: rgba(255, 255, 255, 0.25);
+      background: rgba(255, 255, 255, 0.22);
 
       display: flex;
 
@@ -344,35 +388,33 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
       font-weight: 700;
 
-      font-size: 0.95rem;
+      font-size: 0.92rem;
+
+      letter-spacing: 0.02em;
 
     }
 
-
-
-    .header-info {
-
-      display: flex;
-
-      flex-direction: column;
-
-      gap: 2px;
-
-    }
+    .avatar.online-ring { box-shadow: 0 0 0 2px rgba(255,255,255,0.9), 0 0 0 4px rgba(165, 243, 165, 0.55); }
 
 
 
-    .header-info { flex: 1; }
+    .header-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 
     .name {
 
-      font-weight: 600;
+      font-weight: 700;
 
-      font-size: 1.05rem;
+      font-size: 1.06rem;
 
       color: #fff;
 
       text-decoration: none;
+
+      white-space: nowrap;
+
+      overflow: hidden;
+
+      text-overflow: ellipsis;
 
     }
 
@@ -380,29 +422,81 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
 
 
-    .status {
+    .status { font-size: 0.78rem; opacity: 0.88; }
 
-      font-size: 0.8rem;
+    .status.online { opacity: 1; }
 
-      opacity: 0.85;
+    .status.online::before { content: '● '; color: #b9ffb9; }
+
+
+
+    .call-live-bar {
+
+      display: flex;
+
+      align-items: center;
+
+      gap: 8px;
+
+      padding: 10px 16px;
+
+      background: linear-gradient(90deg, #e8f5e9, #f1f8e9);
+
+      border-bottom: 1px solid rgba(46, 125, 50, 0.15);
+
+      color: #2e7d32;
+
+      font-size: 0.88rem;
+
+      font-weight: 600;
 
     }
 
+    .call-live-bar.ringing { background: linear-gradient(90deg, #fff8e1, #fff3e0); color: #e65100; }
 
+    .call-live-bar mat-icon { font-size: 18px; width: 18px; height: 18px; }
 
-    .status.online {
+    .live-dot {
 
-      opacity: 1;
+      width: 8px; height: 8px; border-radius: 50%;
+
+      background: #43a047;
+
+      animation: liveBlink 1.2s ease-in-out infinite;
 
     }
 
+    .call-live-bar.ringing .live-dot { background: #fb8c00; }
 
+    .live-timer {
 
-    .status.online::before {
+      font-variant-numeric: tabular-nums;
 
-      content: '● ';
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
 
-      color: #a5f3a5;
+      background: rgba(255,255,255,0.7);
+
+      padding: 2px 10px;
+
+      border-radius: 999px;
+
+      margin-left: 4px;
+
+    }
+
+    .end-mini {
+
+      margin-left: auto !important;
+
+      min-height: 32px !important;
+
+      line-height: 32px !important;
+
+      padding: 0 12px !important;
+
+      font-size: 0.78rem !important;
+
+      border-radius: 999px !important;
 
     }
 
@@ -414,43 +508,43 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
       overflow-y: auto;
 
-      padding: 20px 16px;
+      padding: 20px 18px 12px;
 
-      background: #f8f9fd;
+      background:
 
-    }
+        radial-gradient(circle at 20% 10%, rgba(102, 126, 234, 0.06) 0%, transparent 45%),
 
+        radial-gradient(circle at 80% 90%, rgba(118, 75, 162, 0.05) 0%, transparent 40%),
 
+        #f6f8fd;
 
-    .message-row {
+      scroll-behavior: auto;
 
-      display: flex;
-
-      margin-bottom: 10px;
-
-    }
-
-
-
-    .message-row.sent {
-
-      justify-content: flex-end;
+      overflow-anchor: auto;
 
     }
+
+
+
+    .message-row { display: flex; margin-bottom: 8px; animation: msgIn 0.22s ease-out; }
+
+    .message-row.sent { justify-content: flex-end; }
 
 
 
     .bubble {
 
-      max-width: 75%;
+      max-width: min(78%, 520px);
 
-      padding: 10px 14px;
+      padding: 11px 14px 8px;
 
-      border-radius: 16px;
+      border-radius: 18px;
 
       background: #fff;
 
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.06);
+      box-shadow: 0 2px 10px rgba(30, 41, 80, 0.07);
+
+      border: 1px solid rgba(0, 0, 0, 0.04);
 
     }
 
@@ -458,47 +552,41 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
     .message-row.sent .bubble {
 
-      background: linear-gradient(135deg, #667eea, #764ba2);
+      background: linear-gradient(135deg, #667eea 0%, #7c6cf0 50%, #764ba2 100%);
 
       color: #fff;
 
-      border-bottom-right-radius: 4px;
+      border-bottom-right-radius: 6px;
+
+      border: none;
+
+      box-shadow: 0 4px 16px rgba(102, 126, 234, 0.35);
 
     }
 
 
 
-    .message-row:not(.sent) .bubble {
-
-      border-bottom-left-radius: 4px;
-
-    }
+    .message-row:not(.sent) .bubble { border-bottom-left-radius: 6px; }
 
 
 
-    .content {
-
-      display: block;
-
-      word-break: break-word;
-
-      line-height: 1.45;
-
-    }
+    .content { display: block; word-break: break-word; line-height: 1.5; font-size: 0.95rem; }
 
 
 
     .time {
 
-      font-size: 0.7rem;
+      font-size: 0.68rem;
 
-      opacity: 0.75;
+      opacity: 0.72;
 
       display: block;
 
-      margin-top: 4px;
+      margin-top: 6px;
 
       text-align: right;
+
+      letter-spacing: 0.02em;
 
     }
 
@@ -506,15 +594,17 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
     .chat-image {
 
-      max-width: 240px;
+      max-width: 260px;
 
-      max-height: 240px;
+      max-height: 260px;
 
-      border-radius: 10px;
+      border-radius: 12px;
 
       display: block;
 
-      margin-bottom: 4px;
+      margin-bottom: 6px;
+
+      object-fit: cover;
 
     }
 
@@ -522,67 +612,111 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
     .composer {
 
+      padding: 12px 14px max(14px, env(safe-area-inset-bottom));
+
+      background: linear-gradient(180deg, rgba(255,255,255,0.92) 0%, #fff 100%);
+
+      border-top: 1px solid rgba(0, 0, 0, 0.06);
+
+    }
+
+
+
+    .composer-card {
+
       display: flex;
 
-      align-items: center;
+      align-items: flex-end;
 
-      gap: 8px;
+      gap: 6px;
 
-      padding: 12px 16px 16px;
+      padding: 8px 10px;
 
-      background: #fff;
+      border-radius: 28px;
 
-      border-top: 1px solid #eee;
+      background: #f3f5fb;
 
-    }
+      border: 1px solid rgba(102, 126, 234, 0.12);
 
-
-
-    .message-input {
-
-      flex: 1;
-
-      margin: 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.8), 0 4px 18px rgba(79, 98, 196, 0.08);
 
     }
 
 
 
-    .attach-btn {
+    .attach-btn { color: #667eea !important; flex-shrink: 0; }
 
-      color: #667eea;
+
+
+    .input-pill { flex: 1; min-width: 0; }
+
+
+
+    .message-field {
+
+      width: 100%;
+
+      border: none;
+
+      outline: none;
+
+      background: transparent;
+
+      font-size: 0.96rem;
+
+      line-height: 1.45;
+
+      padding: 8px 4px;
+
+      color: #1a1f36;
+
+      font-family: inherit;
 
     }
+
+    .message-field::placeholder { color: #9aa3b8; }
 
 
 
     .send-btn {
 
-      width: 48px;
+      width: 44px;
 
-      height: 48px;
+      height: 44px;
 
-      box-shadow: 0 4px 14px rgba(102, 126, 234, 0.4);
+      border: none;
 
-    }
+      border-radius: 50%;
 
-
-
-    .send-btn mat-icon {
-
-      margin-left: 2px;
-
-    }
-
-    .call-log-row {
+      flex-shrink: 0;
 
       display: flex;
 
+      align-items: center;
+
       justify-content: center;
 
-      margin: 12px 0;
+      cursor: pointer;
+
+      background: linear-gradient(135deg, #667eea, #764ba2);
+
+      color: #fff;
+
+      box-shadow: 0 6px 18px rgba(102, 126, 234, 0.45);
+
+      transition: transform 0.15s, opacity 0.15s, box-shadow 0.15s;
 
     }
+
+    .send-btn:not(:disabled):hover { transform: scale(1.05); box-shadow: 0 8px 22px rgba(102, 126, 234, 0.5); }
+
+    .send-btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+
+    .send-btn mat-icon { font-size: 20px; width: 20px; height: 20px; margin-left: 2px; }
+
+
+
+    .call-log-row { display: flex; justify-content: center; margin: 14px 0; }
 
     .call-log-bubble {
 
@@ -592,41 +726,57 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
       gap: 8px;
 
-      padding: 8px 14px;
+      padding: 9px 16px;
 
       border-radius: 999px;
 
-      background: #eef1fb;
+      background: #fff;
 
-      color: #555;
+      color: #5c6370;
 
-      font-size: 0.85rem;
+      font-size: 0.84rem;
 
-      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+      box-shadow: 0 2px 10px rgba(30, 41, 80, 0.08);
 
-    }
-
-    .call-log-bubble mat-icon {
-
-      font-size: 18px;
-
-      width: 18px;
-
-      height: 18px;
-
-      color: #667eea;
+      border: 1px solid rgba(102, 126, 234, 0.1);
 
     }
 
-    .call-time {
+    .call-log-bubble.missed { color: #c62828; border-color: rgba(198, 40, 40, 0.15); background: #fff5f5; }
 
-      font-size: 0.72rem;
+    .call-log-bubble mat-icon { font-size: 18px; width: 18px; height: 18px; color: #667eea; }
 
-      opacity: 0.75;
+    .call-log-bubble.missed mat-icon { color: #e53935; }
 
-      margin-left: 4px;
+    .call-time { font-size: 0.72rem; opacity: 0.7; margin-left: 2px; }
+
+
+
+    @keyframes msgIn {
+
+      from { opacity: 0; transform: translateY(6px); }
+
+      to { opacity: 1; transform: translateY(0); }
 
     }
+
+    @keyframes liveBlink {
+
+      0%, 100% { opacity: 1; transform: scale(1); }
+
+      50% { opacity: 0.5; transform: scale(0.85); }
+
+    }
+
+    @keyframes callPulse {
+
+      0%, 100% { transform: scale(1); }
+
+      50% { transform: scale(1.08); }
+
+    }
+
+
 
     @media (max-width: 768px) {
 
@@ -660,11 +810,13 @@ import { LocalMessageStoreService } from '../../../core/services/local-message-s
 
       .bubble { max-width: 88%; }
 
-      .chat-image { max-width: min(240px, 70vw); max-height: min(240px, 50vh); }
+      .chat-image { max-width: min(260px, 72vw); max-height: min(260px, 50vh); }
 
-      .composer { padding: 8px 10px max(12px, env(safe-area-inset-bottom)); gap: 4px; }
+      .composer { padding: 8px 10px max(12px, env(safe-area-inset-bottom)); }
 
-      .send-btn { width: 44px; height: 44px; }
+      .composer-card { padding: 6px 8px; border-radius: 24px; }
+
+      .send-btn { width: 40px; height: 40px; }
 
     }
 
@@ -684,6 +836,24 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
   myId = computed(() => this.auth.user()?.id ?? '');
 
+  activeCallWithFriend = computed(() => {
+
+    const room = this.currentRoom();
+
+    const state = this.callService.state();
+
+    const remoteId = this.callService.remoteUserId();
+
+    if (!room || !remoteId) return false;
+
+    const onCall = state === 'active' || state === 'outgoing';
+
+    return onCall && remoteId === room.participant.id;
+
+  });
+
+  liveCallTimer = computed(() => formatLiveCallTimer(this.callService.callDurationSeconds()));
+
   private sub: Subscription | null = null;
 
   private wsSub: Subscription | null = null;
@@ -691,6 +861,8 @@ export class FriendChatComponent implements OnInit, OnDestroy {
   private friendId = '';
 
   @ViewChild('messageInput') private messageInput?: ElementRef<HTMLInputElement>;
+
+  @ViewChild('scrollArea') private scrollArea?: ElementRef<HTMLElement>;
 
 
 
@@ -716,7 +888,7 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
     private snackBar: MatSnackBar,
 
-    private callService: CallService,
+    public callService: CallService,
 
     private chatMessaging: ChatMessagingService,
 
@@ -790,6 +962,24 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
 
 
+  hangUpCall(): void {
+
+    this.callService.hangUp();
+
+  }
+
+
+
+  isMissedCall(msg: MessageResponse): boolean {
+
+    const text = (msg.content ?? '').toLowerCase();
+
+    return text.includes('missed') || text.includes('declined');
+
+  }
+
+
+
   private openFriendChat(): void {
 
     this.chatApi.getFriendRoom(this.friendId).subscribe({
@@ -819,6 +1009,8 @@ export class FriendChatComponent implements OnInit, OnDestroy {
     void this.chatMessaging.loadRoomMessages(roomId, this.friendId).then((msgs) => {
 
       this.messages.update((current) => this.mergeMessageLists(current, msgs));
+
+      this.scrollToLatest();
 
     });
 
@@ -870,6 +1062,12 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
       next: (msg: ChatMessage) => {
 
+        if (this.isSentByMe(msg as MessageResponse)) {
+
+          return;
+
+        }
+
         void this.chatMessaging.persistIncoming(msg as MessageResponse, this.friendId, this.myId()!, this.friendId, roomId).then(() => {
 
           this.appendMessage(msg as MessageResponse);
@@ -894,9 +1092,21 @@ export class FriendChatComponent implements OnInit, OnDestroy {
 
     this.messages.update((m) =>
 
-      m.some((x) => String(x.id).toLowerCase() === String(msg.id).toLowerCase()) ? m : [...m, msg]
+      m.some((x) => isDuplicateMessage(x, msg)) ? m : [...m, msg]
 
     );
+
+    this.scrollToLatest();
+
+  }
+
+
+
+  private scrollToLatest(): void {
+
+    scrollToBottom(this.scrollArea?.nativeElement);
+
+    setTimeout(() => scrollToBottom(this.scrollArea?.nativeElement), 50);
 
   }
 

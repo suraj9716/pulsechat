@@ -1,5 +1,5 @@
 import { Injectable, OnDestroy } from '@angular/core';
-import { Client, IMessage } from '@stomp/stompjs';
+import { Client, IMessage, StompSubscription } from '@stomp/stompjs';
 import SockJS from 'sockjs-client';
 import { BehaviorSubject, Observable, Subject, filter, map, take, timeout } from 'rxjs';
 import { environment } from '../../../environments/environment';
@@ -83,6 +83,14 @@ export class WebSocketService implements OnDestroy {
   private userPartnerSearchingUserId: string | null = null;
   private userCallTopics = new Set<string>();
   private userCallsUserId: string | null = null;
+  private roomChannels = new Map<
+    string,
+    { subject: Subject<ChatMessage>; stompSub: StompSubscription | null }
+  >();
+  private typingChannels = new Map<
+    string,
+    { subject: Subject<{ userId: string; typing: boolean }>; stompSub: StompSubscription | null }
+  >();
 
   connected$ = this.connected.asObservable();
   friendRequest$ = this.friendRequests.asObservable();
@@ -127,9 +135,11 @@ export class WebSocketService implements OnDestroy {
         this.userMatchFoundTopics.clear();
         this.userPartnerSearchingTopics.clear();
         this.userCallTopics.clear();
+        this.resetRoomSubscriptions();
         this.subscribeFriendRequestsInternal();
         this.subscribeFriendMessagesInternal();
         this.subscribeCallsInternal();
+        this.resubscribeAllRooms();
         if (this.userFriendRequestUserId) {
           this.subscribeUserFriendRequestsInternal(this.userFriendRequestUserId);
         }
@@ -181,6 +191,7 @@ export class WebSocketService implements OnDestroy {
     this.userMatchFoundTopics.clear();
     this.userPartnerSearchingTopics.clear();
     this.userCallTopics.clear();
+    this.resetRoomSubscriptions();
     this.connect();
   }
 
@@ -588,50 +599,82 @@ export class WebSocketService implements OnDestroy {
   }
 
   subscribeToRoom(roomId: string): Observable<ChatMessage> {
-    const subject = new Subject<ChatMessage>();
+    const key = String(roomId);
     if (!this.client) this.connect();
 
-    this.whenConnected(() => {
-      if (!this.client) throw new Error('No STOMP client');
-      this.client.subscribe(`/topic/room/${roomId}`, (msg: IMessage) => {
-        try {
-          subject.next(JSON.parse(msg.body));
-        } catch (e) {
-          console.warn('Parse message failed', e);
-        }
-      });
-    }).subscribe({
-      error: (e) => {
-        console.warn('WebSocket not connected for subscribeToRoom', e);
-        subject.error(e);
-      }
+    let channel = this.roomChannels.get(key);
+    if (!channel) {
+      channel = { subject: new Subject<ChatMessage>(), stompSub: null };
+      this.roomChannels.set(key, channel);
+    }
+
+    this.whenConnected(() => this.ensureRoomSubscription(key)).subscribe({
+      error: (e) => console.warn('WebSocket not connected for subscribeToRoom', e)
     });
 
-    return subject.asObservable();
+    return channel.subject.asObservable();
   }
 
   subscribeToTyping(roomId: string): Observable<{ userId: string; typing: boolean }> {
-    const subject = new Subject<{ userId: string; typing: boolean }>();
+    const key = String(roomId);
     if (!this.client) this.connect();
 
-    this.whenConnected(() => {
-      if (!this.client) throw new Error('No STOMP client');
-      this.client.subscribe(`/topic/room/${roomId}/typing`, (msg: IMessage) => {
-        try {
-          const body = JSON.parse(msg.body);
-          subject.next({ userId: body.userId, typing: body.typing !== false });
-        } catch (e) {
-          console.warn('Parse typing failed', e);
-        }
-      });
-    }).subscribe({
-      error: (e) => {
-        console.warn('WebSocket not connected for subscribeToTyping', e);
-        subject.error(e);
-      }
+    let channel = this.typingChannels.get(key);
+    if (!channel) {
+      channel = { subject: new Subject<{ userId: string; typing: boolean }>(), stompSub: null };
+      this.typingChannels.set(key, channel);
+    }
+
+    this.whenConnected(() => this.ensureTypingSubscription(key)).subscribe({
+      error: (e) => console.warn('WebSocket not connected for subscribeToTyping', e)
     });
 
-    return subject.asObservable();
+    return channel.subject.asObservable();
+  }
+
+  private resetRoomSubscriptions(): void {
+    for (const channel of this.roomChannels.values()) {
+      channel.stompSub = null;
+    }
+    for (const channel of this.typingChannels.values()) {
+      channel.stompSub = null;
+    }
+  }
+
+  private resubscribeAllRooms(): void {
+    for (const roomId of this.roomChannels.keys()) {
+      this.ensureRoomSubscription(roomId);
+    }
+    for (const roomId of this.typingChannels.keys()) {
+      this.ensureTypingSubscription(roomId);
+    }
+  }
+
+  private ensureRoomSubscription(roomId: string): void {
+    const channel = this.roomChannels.get(roomId);
+    if (!channel || !this.client?.connected || channel.stompSub) return;
+
+    channel.stompSub = this.client.subscribe(`/topic/room/${roomId}`, (msg: IMessage) => {
+      try {
+        channel.subject.next(JSON.parse(msg.body));
+      } catch (e) {
+        console.warn('Parse message failed', e);
+      }
+    });
+  }
+
+  private ensureTypingSubscription(roomId: string): void {
+    const channel = this.typingChannels.get(roomId);
+    if (!channel || !this.client?.connected || channel.stompSub) return;
+
+    channel.stompSub = this.client.subscribe(`/topic/room/${roomId}/typing`, (msg: IMessage) => {
+      try {
+        const body = JSON.parse(msg.body);
+        channel.subject.next({ userId: body.userId, typing: body.typing !== false });
+      } catch (e) {
+        console.warn('Parse typing failed', e);
+      }
+    });
   }
 
   ngOnDestroy(): void {

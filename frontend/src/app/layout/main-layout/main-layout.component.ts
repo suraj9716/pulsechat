@@ -1,4 +1,4 @@
-import { Component, OnInit, OnDestroy, signal, effect } from '@angular/core';
+import { Component, OnInit, OnDestroy, signal, effect, computed } from '@angular/core';
 
 import { CommonModule } from '@angular/common';
 
@@ -37,6 +37,8 @@ import { FriendNotificationService } from '../../core/services/friend-notificati
 import { MessageNotificationService } from '../../core/services/message-notification.service';
 
 import { CallService } from '../../core/services/call.service';
+
+import { formatLiveCallTimer } from '../../core/utils/call-log.helper';
 
 import { APP_NAME } from '../../core/constants/app.constants';
 
@@ -174,36 +176,39 @@ import { Subscription } from 'rxjs';
 
       <div class="call-overlay incoming">
 
-        <mat-card>
+        <div class="call-card">
 
-          <mat-card-content>
+          <div class="call-avatar-ring incoming-ring">
 
-            <mat-icon class="call-icon">call</mat-icon>
+            <mat-icon>call</mat-icon>
 
-            <p><strong>{{ call.remoteUsername() }}</strong> is calling...</p>
+          </div>
 
-            @if (call.error()) {
-              <p class="call-error">{{ call.error() }}</p>
-            }
+          <p class="call-title">Incoming call</p>
 
-            <div class="call-actions">
+          <p class="call-name">{{ call.remoteUsername() }}</p>
 
-              <button
-                mat-fab
-                color="primary"
-                type="button"
-                [disabled]="call.accepting()"
-                (click)="acceptCall()">
-                <mat-icon>{{ call.accepting() ? 'hourglass_top' : 'call' }}</mat-icon>
-              </button>
+          @if (call.error()) {
+            <p class="call-error">{{ call.error() }}</p>
+          }
 
-              <button mat-fab color="warn" (click)="rejectCall()"><mat-icon>call_end</mat-icon></button>
+          <div class="call-actions">
 
-            </div>
+            <button
+              mat-fab
+              color="primary"
+              type="button"
+              class="accept-btn"
+              [disabled]="call.accepting()"
+              (click)="acceptCall()">
+              <mat-icon>{{ call.accepting() ? 'hourglass_top' : 'call' }}</mat-icon>
+            </button>
 
-          </mat-card-content>
+            <button mat-fab color="warn" class="end-btn" (click)="rejectCall()"><mat-icon>call_end</mat-icon></button>
 
-        </mat-card>
+          </div>
+
+        </div>
 
       </div>
 
@@ -211,33 +216,41 @@ import { Subscription } from 'rxjs';
 
       <div class="call-overlay active">
 
-        <mat-card>
+        <div class="call-card">
 
-          <mat-card-content>
+          <div class="call-avatar-ring" [class.live]="call.state() === 'active'">
 
-            <mat-icon class="call-icon">call</mat-icon>
+            <mat-icon>call</mat-icon>
 
-            <p>{{ call.state() === 'outgoing' ? 'Calling' : 'On call with' }} <strong>{{ call.remoteUsername() }}</strong></p>
+          </div>
 
-            @if (call.error()) {
-              <p class="call-error">{{ call.error() }}</p>
-            }
+          <p class="call-title">{{ call.state() === 'outgoing' ? 'Calling...' : 'On call' }}</p>
 
-            <div class="call-actions">
+          <p class="call-name">{{ call.remoteUsername() }}</p>
 
-              <button mat-fab class="speaker-btn" (click)="toggleSpeaker()" [attr.aria-label]="call.speakerOn() ? 'Speaker on' : 'Speaker off'">
+          @if (call.state() === 'active') {
 
-                <mat-icon>{{ call.speakerOn() ? 'volume_up' : 'volume_off' }}</mat-icon>
+            <p class="call-timer">{{ liveCallTimer() }}</p>
 
-              </button>
+          }
 
-              <button mat-fab color="warn" (click)="hangUp()"><mat-icon>call_end</mat-icon></button>
+          @if (call.error()) {
+            <p class="call-error">{{ call.error() }}</p>
+          }
 
-            </div>
+          <div class="call-actions">
 
-          </mat-card-content>
+            <button mat-fab class="speaker-btn" (click)="toggleSpeaker()" [attr.aria-label]="call.speakerOn() ? 'Speaker on' : 'Speaker off'">
 
-        </mat-card>
+              <mat-icon>{{ call.speakerOn() ? 'volume_up' : 'volume_off' }}</mat-icon>
+
+            </button>
+
+            <button mat-fab color="warn" class="end-btn" (click)="hangUp()"><mat-icon>call_end</mat-icon></button>
+
+          </div>
+
+        </div>
 
       </div>
 
@@ -473,7 +486,9 @@ import { Subscription } from 'rxjs';
 
       inset: 0;
 
-      background: rgba(0,0,0,0.55);
+      background: rgba(12, 16, 36, 0.72);
+
+      backdrop-filter: blur(8px);
 
       display: flex;
 
@@ -487,15 +502,89 @@ import { Subscription } from 'rxjs';
 
     }
 
-    .call-overlay mat-card { max-width: 320px; width: 100%; text-align: center; padding: 24px; border-radius: 20px; }
+    .call-card {
 
-    .call-icon { font-size: 48px; width: 48px; height: 48px; color: #667eea; margin-bottom: 8px; }
+      max-width: 340px;
 
-    .call-actions { display: flex; justify-content: center; align-items: center; gap: 24px; margin-top: 16px; }
+      width: 100%;
+
+      text-align: center;
+
+      padding: 32px 28px 28px;
+
+      border-radius: 28px;
+
+      background: linear-gradient(165deg, #fff 0%, #f8f9ff 100%);
+
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+
+    }
+
+    .call-avatar-ring {
+
+      width: 88px;
+
+      height: 88px;
+
+      margin: 0 auto 16px;
+
+      border-radius: 50%;
+
+      display: flex;
+
+      align-items: center;
+
+      justify-content: center;
+
+      background: linear-gradient(135deg, #667eea, #764ba2);
+
+      color: #fff;
+
+      box-shadow: 0 8px 28px rgba(102, 126, 234, 0.45);
+
+    }
+
+    .call-avatar-ring.incoming-ring { animation: ringPulse 1.6s ease-in-out infinite; }
+
+    .call-avatar-ring.live { box-shadow: 0 0 0 6px rgba(102, 126, 234, 0.2), 0 8px 28px rgba(102, 126, 234, 0.45); }
+
+    .call-avatar-ring mat-icon { font-size: 40px; width: 40px; height: 40px; }
+
+    .call-title { margin: 0; font-size: 0.9rem; color: #667eea; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; }
+
+    .call-name { margin: 6px 0 0; font-size: 1.35rem; font-weight: 700; color: #1a1f36; }
+
+    .call-timer {
+
+      margin: 12px 0 0;
+
+      font-size: 2rem;
+
+      font-weight: 700;
+
+      font-variant-numeric: tabular-nums;
+
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+
+      color: #667eea;
+
+      letter-spacing: 0.04em;
+
+    }
+
+    .call-actions { display: flex; justify-content: center; align-items: center; gap: 28px; margin-top: 24px; }
 
     .speaker-btn { background: #667eea; color: #fff; }
 
-    .call-error { color: #e53935; font-size: 14px; margin: 8px 0 0; }
+    .call-error { color: #e53935; font-size: 14px; margin: 10px 0 0; }
+
+    @keyframes ringPulse {
+
+      0%, 100% { transform: scale(1); box-shadow: 0 8px 28px rgba(102, 126, 234, 0.45); }
+
+      50% { transform: scale(1.06); box-shadow: 0 12px 36px rgba(102, 126, 234, 0.55); }
+
+    }
 
     .menu-btn { margin-right: 4px; }
 
@@ -529,7 +618,7 @@ import { Subscription } from 'rxjs';
 
       .brand-icon { display: none; }
 
-      .call-overlay mat-card { padding: 16px; }
+      .call-overlay .call-card { padding: 24px 20px 20px; }
 
     }
 
@@ -550,6 +639,8 @@ export class MainLayoutComponent implements OnInit, OnDestroy {
   pendingRequests = this.friendNotification.pendingCount;
 
   call = this.callService;
+
+  liveCallTimer = computed(() => formatLiveCallTimer(this.callService.callDurationSeconds()));
 
   isMobile = signal(false);
 
